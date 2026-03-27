@@ -1,6 +1,6 @@
 #!/bin/bash
 # =================================================================
-# install.sh — X-UI PRO установщик
+# install.sh — X-PRO установщик
 # Использование:
 #   bash <(curl -Ls https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) [аргументы]
 #
