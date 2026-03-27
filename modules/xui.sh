@@ -82,60 +82,37 @@ remove3xui() {
 
 # =================================================================
 # ПОРТ И CREDENTIALS
+# Источник правды: x-ui settings (официальная команда 3x-ui)
 # =================================================================
+
+# Парсим вывод x-ui settings: "key: value"
+_xui_settings_get() {
+    local key="$1"
+    x-ui settings 2>/dev/null | grep -i "^${key}:" | sed "s/^${key}:[[:space:]]*//"
+}
+
 xuiGetPort() {
-    # Пробуем из xpro.conf
     local port
-    port=$(xpro_conf_get "XUI_PORT")
-    [ -n "$port" ] && { echo "$port"; return; }
-
-    # Пробуем из БД sqlite
-    if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
-        port=$(sqlite3 "$XUI_DB" \
-            "SELECT value FROM settings WHERE key='port';" 2>/dev/null)
-        [ -n "$port" ] && { echo "$port"; return; }
-    fi
-
-    # Фалбек — парсим конфиг файл x-ui
-    port=$(grep -oP '"port"\s*:\s*\K\d+' \
-        /etc/x-ui/config.json 2>/dev/null | head -1)
-
+    port=$(_xui_settings_get "port")
     echo "${port:-2053}"
 }
 
 xuiGetUser() {
-    # БД — источник правды. xpro.conf только кэш для случаев когда БД недоступна.
-    local user=""
-    if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
-        user=$(sqlite3 "$XUI_DB" \
-            "SELECT username FROM users LIMIT 1;" 2>/dev/null)
-    fi
-    # Фалбек на кэш
-    [ -z "$user" ] && user=$(xpro_conf_get "XUI_USER")
+    local user
+    user=$(_xui_settings_get "username")
     echo "${user:-admin}"
 }
 
 xuiGetPass() {
-    # БД — источник правды.
-    local pass=""
-    if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
-        pass=$(sqlite3 "$XUI_DB" \
-            "SELECT password FROM users LIMIT 1;" 2>/dev/null)
-    fi
-    [ -z "$pass" ] && pass=$(xpro_conf_get "XUI_PASS")
+    local pass
+    pass=$(_xui_settings_get "password")
     echo "${pass:-admin}"
 }
 
 # WebBasePath — рандомный путь панели (генерируется 3x-ui при установке)
 xuiGetWebBasePath() {
-    local path=""
-    # Читаем из БД
-    if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
-        path=$(sqlite3 "$XUI_DB" \
-            "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null)
-    fi
-    # Фалбек на xpro.conf
-    [ -z "$path" ] && path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
+    local path
+    path=$(_xui_settings_get "webBasePath")
     # Нормализуем: убираем ведущий и завершающий /
     path="${path#/}"
     path="${path%/}"
@@ -144,11 +121,7 @@ xuiGetWebBasePath() {
 
 xuiSetPort() {
     local new_port="$1"
-    if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
-        sqlite3 "$XUI_DB" \
-            "UPDATE settings SET value='${new_port}' WHERE key='port';" 2>/dev/null
-    fi
-    xpro_conf_set "XUI_PORT" "$new_port"
+    x-ui setting -port "$new_port" &>/dev/null
     systemctl restart x-ui 2>/dev/null || true
     echo "${green}Порт панели изменён на ${new_port}${reset}"
 }
