@@ -69,13 +69,32 @@ _nginx_reload() {
     fi
 }
 
+# Проверка: нужно ли пересоздавать конфиг (порт изменился или файл отсутствует)
+_nginx_conf_needs_update() {
+    local domain="$1"
+    local xpro_conf="${NGINX_CONF_DIR:-/etc/nginx/conf.d}/xpro.conf"
+    [ -f "$xpro_conf" ] || return 0
+    grep -qF "server_name ${domain}" "$xpro_conf" || return 0
+    local cfg_port db_port
+    cfg_port=$(grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' "$xpro_conf" | head -1)
+    db_port=$(xuiGetPort)
+    [ "$cfg_port" = "$db_port" ] || return 0
+    nginx -t &>/dev/null || return 0
+    return 1
+}
+
 # =================================================================
 # ОСНОВНОЙ КОНФИГ NGINX
 # =================================================================
 writeNginxConfig() {
     local domain="$1"
-    local xui_port="$2"
-    local cdn="${3:-off}"
+    local cdn="${2:-off}"
+
+    # Читаем актуальные данные ПРЯМО перед записью конфига
+    local xui_port xui_web_path
+    xui_port=$(xuiGetPort)
+    xui_web_path=$(xuiGetWebBasePath)
+    [[ ! "$xui_port" =~ ^[0-9]+$ ]] && xui_port="2053"
 
     _setDefaultCert
 
@@ -87,17 +106,12 @@ writeNginxConfig() {
     local fake_host
     fake_host=$(echo "$fake_url" | sed 's|https://||;s|http://||;s|/.*||')
 
-    # WebBasePath — читаем из БД через xui.sh функцию (уже загружена)
+    # WebBasePath — уже в формате /path/ из xuiGetWebBasePath
     local web_path
-    web_path=$(xuiGetWebBasePath 2>/dev/null || true)
-    # Если пусто — генерируем рандомный и сохраняем
-    if [ -z "$web_path" ]; then
-        web_path=$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 12)
-        xpro_conf_set "XUI_WEB_BASE_PATH" "$web_path"
-        echo "${yellow}WebBasePath не найден в БД, сгенерирован: /${web_path}/${reset}"
-    else
-        xpro_conf_set "XUI_WEB_BASE_PATH" "$web_path"
-    fi
+    web_path="$xui_web_path"
+    # Убираем слеши для location (nginx location /path/ — уже с ними)
+    # Сохраняем в xpro.conf для справки
+    xpro_conf_set "XUI_WEB_BASE_PATH" "$web_path"
 
     # nginx.conf главный
     cat > /etc/nginx/nginx.conf << 'NGINXMAIN'

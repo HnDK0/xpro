@@ -88,7 +88,10 @@ remove3xui() {
 # Парсим вывод x-ui settings: "key: value"
 _xui_settings_get() {
     local key="$1"
-    x-ui settings 2>/dev/null | grep -i "^${key}:" | sed "s/^${key}:[[:space:]]*//"
+    x-ui settings 2>/dev/null \
+        | grep -i "^${key}:" \
+        | sed "s/^${key}:[[:space:]]*//" \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
 xuiGetPort() {
@@ -113,10 +116,13 @@ xuiGetPass() {
 xuiGetWebBasePath() {
     local path
     path=$(_xui_settings_get "webBasePath")
-    # Нормализуем: убираем ведущий и завершающий /
-    path="${path#/}"
-    path="${path%/}"
-    echo "${path}"
+    # Убираем пробелы, слеши — приводим к формату /path/
+    path=$(echo "$path" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's|^/*||' -e 's|/*$||')
+    if [ -n "$path" ]; then
+        echo "/${path}/"
+    else
+        echo "/"
+    fi
 }
 
 xuiSetPort() {
@@ -124,6 +130,29 @@ xuiSetPort() {
     x-ui setting -port "$new_port" &>/dev/null
     systemctl restart x-ui 2>/dev/null || true
     echo "${green}Порт панели изменён на ${new_port}${reset}"
+}
+
+# Ждём пока 3x-ui инициализирует БД и сгенерирует credentials
+xuiWaitForDB() {
+    local timeout="${1:-15}"
+    local elapsed=0
+    echo -n "  Ожидание инициализации БД"
+    while [ "$elapsed" -lt "$timeout" ]; do
+        local test_port test_user
+        test_port=$(xuiGetPort)
+        test_user=$(xuiGetUser)
+        if [[ "$test_port" =~ ^[0-9]+$ ]] && \
+           [ -n "$test_user" ] && \
+           [ "$test_user" != "admin" ]; then
+            echo " [OK]"
+            return 0
+        fi
+        sleep 1
+        echo -n "."
+        elapsed=$((elapsed + 1))
+    done
+    echo " [Timeout]"
+    return 1
 }
 
 # =================================================================

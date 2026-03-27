@@ -300,11 +300,9 @@ main() {
     parse_args "$@"
 
     clear
-    cat << 'EOF'
-╔═══════════════════════════════════════╗
-║           X-UI PRO Installer          ║
-╚═══════════════════════════════════════╝
-EOF
+    echo "${cyan}================================================================${reset}"
+    echo "   ${green}X-UI PRO Installer${reset}"
+    echo "${cyan}================================================================${reset}"
     echo ""
     echo "  Панель:   $ARG_PANEL"
     echo "  Домен:    $ARG_DOMAIN"
@@ -327,6 +325,15 @@ EOF
     _step "Определение системы"
     identifyOS
     _ok "OS определена: ${OS_NAME:-Linux}"
+
+    _step "Подготовка системы"
+    # Удаляем мусорные CF-репо ДО любых apt операций (Баг: NO_PUBKEY на Ubuntu 24.04)
+    rm -f /etc/apt/sources.list.d/cloudflare-client.list
+    rm -f /etc/apt/sources.list.d/cloudflare-warp.list
+    ${PACKAGE_MANAGEMENT_UPDATE} -qq 2>/dev/null || true
+    installPackage "gnupg2" || true
+    installPackage "sqlite3" || true
+    _ok "Базовые пакеты"
 
     _step "Настройка Swap"
     setupSwap
@@ -354,18 +361,19 @@ EOF
         _ok "3x-ui установлен"
     fi
 
-    # Читаем реальный порт из БД — установщик 3x-ui мог назначить свой
-    local real_port
-    real_port=$(xuiGetPort)
-    ARG_PORT="$real_port"
-    _yellow "Порт панели (из БД): $ARG_PORT"
+    # Ждём инициализации БД 3x-ui (credentials могут быть не готовы сразу)
+    _step "Синхронизация с БД 3x-ui"
+    xuiWaitForDB 15 || _yellow "warn: таймаут БД, credentials могут быть дефолтными"
+    _ok "БД синхронизирована"
 
-    # Принудительно читаем credentials из БД (не из кэша xpro.conf)
-    # Это гарантирует что мы видим рандомные данные которые 3x-ui сгенерировал
-    local real_user real_pass real_web_path
+    # Читаем реальные данные из БД (единый источник правды)
+    local real_port real_user real_pass real_web_path
+    real_port=$(xuiGetPort)
     real_user=$(xuiGetUser)
     real_pass=$(xuiGetPass)
     real_web_path=$(xuiGetWebBasePath)
+    ARG_PORT="$real_port"
+    _yellow "Порт панели (из БД): $ARG_PORT"
 
     # Сохраняем в xpro.conf как кэш
     xpro_conf_set "XUI_PORT"          "$real_port"
@@ -411,12 +419,12 @@ EOF
     # ШАГ 5 — Nginx конфиг (cert и fake_url уже готовы)
     # =============================================================
     _step "Настройка Nginx reverse proxy"
-    if _nginx_conf_is_done "$ARG_DOMAIN"; then
-        _ok "Nginx конфиг уже настроен для ${ARG_DOMAIN} — пропускаем"
+    if ! _nginx_conf_needs_update "$ARG_DOMAIN"; then
+        _ok "Nginx конфиг актуален — пропускаем"
     else
-        writeNginxConfig "$ARG_DOMAIN" "$ARG_PORT" "$ARG_CDN" || \
+        writeNginxConfig "$ARG_DOMAIN" "$ARG_CDN" || \
             _fail "Не удалось записать конфиг Nginx"
-        _ok "Nginx конфиг записан"
+        _ok "Nginx конфиг обновлён"
     fi
 
     # =============================================================
@@ -578,35 +586,43 @@ print_summary() {
     server_ip=$(getServerIP 2>/dev/null || echo "?")
     ssl_info=$(checkCertExpiry 2>/dev/null || echo "?")
 
+    # Финальная синхронизация — credentials могли обновиться после всех шагов
+    sleep 2
+    xuiWaitForDB 5 2>/dev/null || true
+    local fresh_user fresh_pass
+    fresh_user=$(xuiGetUser 2>/dev/null || echo "$xui_user")
+    fresh_pass=$(xuiGetPass 2>/dev/null || echo "$xui_pass")
+    [ "$fresh_user" != "admin" ] && xui_user="$fresh_user"
+    [ "$fresh_pass" != "admin" ] && xui_pass="$fresh_pass"
+
     if [ -n "$xui_path" ]; then
-        panel_url="${domain}/${xui_path}/"
+        panel_url="${domain}/${xui_path}"
     else
-        panel_url="${domain}/  (путь не определён — проверь xpro)"
+        panel_url="${domain}  (путь не определён)"
     fi
 
     echo ""
-    echo "╔═══════════════════════════════════════════════╗"
-    echo "║         X-UI PRO — Установка завершена        ║"
-    echo "╠═══════════════════════════════════════════════╣"
-    printf "║  %-45s║\n" ""
-    printf "║  Панель:  https://%-27s║\n" "${panel_url}"
-    printf "║  IP:      %-35s║\n" "$server_ip"
-    printf "║  Логин:   %-35s║\n" "$xui_user"
-    printf "║  Пароль:  %-35s║\n" "$xui_pass"
-    printf "║  SSL:     %-35s║\n" "$ssl_info"
-    printf "║  %-45s║\n" ""
-    echo "╠═══════════════════════════════════════════════╣"
+    echo "${cyan}================================================================${reset}"
+    printf "   ${green}X-UI PRO — Установка завершена${reset}\n"
+    echo "${cyan}================================================================${reset}"
+    printf "  Панель:  https://%s\n" "${panel_url}"
+    printf "  IP:      %s\n" "$server_ip"
+    printf "  Логин:   %s\n" "$xui_user"
+    printf "  Пароль:  %s\n" "$xui_pass"
+    printf "  SSL:     %s\n" "$ssl_info"
+    echo "${cyan}================================================================${reset}"
+
     [[ "$(xpro_conf_get WARP_INSTALLED 2>/dev/null)" == "yes" ]] && \
-        printf "║  WARP     ● socks5://127.0.0.1:40000          ║\n"
+        echo "  WARP:     socks5://127.0.0.1:40000"
     [[ "$(xpro_conf_get TOR_INSTALLED 2>/dev/null)" == "yes" ]] && \
-        printf "║  Tor      ● socks5://127.0.0.1:40003          ║\n"
+        echo "  Tor:      socks5://127.0.0.1:40003"
     [[ "$(xpro_conf_get PSIPHON_INSTALLED 2>/dev/null)" == "yes" ]] && \
-        printf "║  Psiphon  ● socks5://127.0.0.1:40002          ║\n"
-    echo "╠═══════════════════════════════════════════════╣"
-    printf "║  %-45s║\n" "Управление: xpro"
-    printf "║  %-45s║\n" "Удаление:   xpro uninstall"
-    printf "║  %-45s║\n" ""
-    echo "╚═══════════════════════════════════════════════╝"
+        echo "  Psiphon:  socks5://127.0.0.1:40002"
+
+    echo "${cyan}================================================================${reset}"
+    echo "  Управление: xpro"
+    echo "  Удаление:   xpro uninstall"
+    echo "${cyan}================================================================${reset}"
     echo ""
 
     if [[ "$ARG_CDN" == "on" ]]; then

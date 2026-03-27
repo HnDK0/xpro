@@ -58,6 +58,15 @@ installWarp() {
     echo "${cyan}Установка Cloudflare WARP...${reset}"
     [ -z "${PACKAGE_MANAGEMENT_INSTALL:-}" ] && identifyOS
 
+    # GPG должен быть установлен
+    if ! command -v gpg &>/dev/null; then
+        installPackage "gnupg2" || return 1
+    fi
+
+    # Очистка мусорных репозиториев CF (Баг: NO_PUBKEY на Ubuntu 24.04)
+    rm -f /etc/apt/sources.list.d/cloudflare-client.list
+    rm -f /etc/apt/sources.list.d/cloudflare-warp.list
+
     if command -v apt &>/dev/null; then
         curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
             | gpg --yes --dearmor \
@@ -72,6 +81,12 @@ https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
 
     ${PACKAGE_MANAGEMENT_UPDATE} &>/dev/null
     installPackage "cloudflare-warp"
+
+    # Финальная проверка
+    if ! command -v warp-cli &>/dev/null; then
+        echo "${red}WARP не установлен — binary missing${reset}"
+        return 1
+    fi
 
     # Настраиваем systemd unit — автоперезапуск вместо watchdog
     local svc_override="/etc/systemd/system/warp-svc.service.d"

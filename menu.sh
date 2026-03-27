@@ -50,38 +50,6 @@ _status_line() {
 # считает escape-коды как печатные символы и ломает выравнивание.
 # =================================================================
 
-# Ширина содержимого между ║..║ (не считая самих ║)
-_BOX_W=44
-
-# Печатает одну строку бокса: ║  LABEL   VALUE  ║
-# Все значения с цветом передаём через _pad чтобы ANSI не ломал ширину
-_box_row() {
-    local label="$1"   # без цвета, макс ~10 символов
-    local value="$2"   # может содержать ANSI
-    # Видимая длина label (без ANSI, на случай если передадут с цветом)
-    local label_vis
-    label_vis=$(printf '%s' "$label" | sed 's/\x1b\[[0-9;]*[mABCDJKHf]//g; s/\x1b(B//g')
-    # Видимая длина value
-    local value_vis
-    value_vis=$(printf '%s' "$value" | sed 's/\x1b\[[0-9;]*[mABCDJKHf]//g; s/\x1b(B//g')
-    # Отступ слева: 2 пробела. Ширина label колонки: 10. Разделитель: 2 пробела.
-    # Итого фиксированная часть: 2 + 10 + 2 = 14. Остаток на value + padding: BOX_W - 14 - 2(правый отступ)
-    local col_label=10
-    local left_pad=2
-    local right_pad=2
-    local val_room=$(( _BOX_W - left_pad - col_label - 2 - right_pad ))
-    # padding после value
-    local pad_len=$(( val_room - ${#value_vis} ))
-    [ $pad_len -lt 0 ] && pad_len=0
-    printf "${cyan}║${reset}%${left_pad}s%-${col_label}s  %s%${pad_len}s  ${cyan}║${reset}\n" \
-        "" "$label_vis" "$value" ""
-}
-
-# Пустая строка бокса
-_box_empty() {
-    printf "${cyan}║${reset}%$(( _BOX_W ))s${cyan}║${reset}\n" ""
-}
-
 show_status() {
     clear
 
@@ -128,39 +96,19 @@ show_status() {
         psiphon_s="${red}не установлен${reset}"
     fi
 
-    # Строим бокс
-    # Заголовок: версия | флаг IP  (без _box_row — особый формат)
-    local hdr_left="X-UI PRO v${XPRO_VERSION}"
-    local hdr_right="${flag}  ${server_ip}"
-    local hdr_right_vis="${flag}  ${server_ip}"   # нет ANSI
-    local hdr_left_vis="$hdr_left"
-    local sep="  │  "
-    local hdr_content="${hdr_left_vis}${sep}${hdr_right_vis}"
-    local hdr_pad=$(( _BOX_W - ${#hdr_content} ))
-    [ $hdr_pad -lt 0 ] && hdr_pad=0
-
     echo ""
-    echo "${cyan}╔$(printf '═%.0s' $(seq 1 $_BOX_W))╗${reset}"
-    printf "${cyan}║${reset}  %s%s%s%${hdr_pad}s  ${cyan}║${reset}\n" \
-        "$hdr_left" "$sep" "$hdr_right" ""
-    echo "${cyan}╠$(printf '═%.0s' $(seq 1 $_BOX_W))╣${reset}"
-    _box_empty
-
-    # Сервисы
-    _box_row "3x-ui"  "$xui_status    ${cyan}${panel_url}${reset}"
-    _box_row "Nginx"  "$nginx_status  SSL: $cert_expiry"
-    _box_row "SSH"    "${green}port ${ssh_port}${reset}"
-
-    _box_empty
-    echo "${cyan}╠$(printf '═%.0s' $(seq 1 $_BOX_W))╣${reset}"
-
-    # Туннели
-    _box_row "WARP"    "$warp_s"
-    _box_row "Tor"     "$tor_s"
-    _box_row "Psiphon" "$psiphon_s"
-
-    _box_empty
-    echo "${cyan}╚$(printf '═%.0s' $(seq 1 $_BOX_W))╝${reset}"
+    echo "${cyan}================================================================${reset}"
+    printf "   ${red}X-UI PRO v${XPRO_VERSION}${reset}  %s  %s %s\n" \
+        "$(date +'%d.%m.%Y %H:%M')" "$flag" "$server_ip"
+    echo "${cyan}================================================================${reset}"
+    echo -e "  $(printf "%-9s" "3x-ui:")$xui_status  ${cyan}${panel_url}${reset}"
+    echo -e "  $(printf "%-9s" "Nginx:")$nginx_status  SSL: $cert_expiry"
+    echo -e "  $(printf "%-9s" "SSH:")${green}port ${ssh_port}${reset}"
+    echo -e "${cyan}----------------------------------------------------------------${reset}"
+    echo -e "  $(printf "%-9s" "WARP:")$warp_s"
+    echo -e "  $(printf "%-9s" "Tor:")$tor_s"
+    echo -e "  $(printf "%-9s" "Psiphon:")$psiphon_s"
+    echo -e "${cyan}================================================================${reset}"
     echo ""
 }
 
