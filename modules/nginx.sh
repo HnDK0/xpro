@@ -69,7 +69,7 @@ _nginx_conf_is_current() {
     grep -qF "server_name ${domain}" "$xpro_conf" || return 1
     local cfg_port db_port
     cfg_port=$(grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' "$xpro_conf" | head -1)
-    db_port=$(xuiGetPort)
+    db_port=$(xpro_conf_get "XUI_PORT")
     [ "$cfg_port" = "$db_port" ] || return 1
     nginx -t &>/dev/null || return 1
     return 0
@@ -81,11 +81,12 @@ _nginx_conf_is_current() {
 writeNginxConfig() {
     local domain="$1"
     local cdn="${2:-off}"
+    local xui_port="${3:-}"
+    local web_path="${4:-}"
 
-    # Читаем актуальные данные ПРЯМО перед записью конфига
-    local xui_port xui_web_path
-    xui_port=$(xuiGetPort)
-    xui_web_path=$(xuiGetWebBasePath)
+    # Если не переданы — читаем из xpro.conf
+    [ -z "$xui_port" ] && xui_port=$(xpro_conf_get "XUI_PORT")
+    [ -z "$web_path" ] && web_path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
     [[ ! "$xui_port" =~ ^[0-9]+$ ]] && xui_port="2053"
 
     _setDefaultCert
@@ -98,14 +99,10 @@ writeNginxConfig() {
     local fake_host
     fake_host=$(echo "$fake_url" | sed 's|https://||;s|http://||;s|/.*||')
 
-    # xuiGetWebBasePath() возвращает /path/ — убираем обрамляющие слеши,
-    # иначе в конфиге получается location //path// { что nginx не матчит.
-    local web_path
-    web_path="$xui_web_path"
+    # Очищаем web_path от ANSI escape кодов и trailing slash
+    web_path=$(echo "$web_path" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
     web_path="${web_path#/}"; web_path="${web_path%/}"
-    # Если после strip получилась пустая строка — оставляем пустую (location /)
     [ -z "$web_path" ] && web_path=""
-    xpro_conf_set "XUI_WEB_BASE_PATH" "/${web_path:-}/"
 
     # nginx.conf главный
     cat > /etc/nginx/nginx.conf << 'NGINXMAIN'
@@ -564,7 +561,7 @@ toggleCfGuard() {
 
         if ! grep -q "cloudflare_ip" "$NGINX_XPRO_CONF" 2>/dev/null; then
             local guard_path
-            guard_path=$(xuiGetWebBasePath)
+            guard_path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
             guard_path="${guard_path#/}"; guard_path="${guard_path%/}"
             # Если после strip получилась пустая строка — оставляем пустую (location /)
             [ -z "$guard_path" ] && guard_path=""

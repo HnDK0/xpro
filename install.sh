@@ -337,35 +337,30 @@ main() {
     # =============================================================
     # ШАГ 1 — 3x-ui
     # =============================================================
+    # Генерируем credentials ДО установки 3x-ui
+    local XUI_USER XUI_PASS XUI_PORT XUI_PATH
+    XUI_USER=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 8)
+    XUI_PASS=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
+    XUI_PORT=$(generateFreePort)
+    XUI_PATH=$(generateRandomPath)
+    XUI_PATH="${XUI_PATH#/}"; XUI_PATH="${XUI_PATH%/}"
+
+    # Сохраняем в xpro.conf
+    xpro_conf_set "XUI_USER"          "$XUI_USER"
+    xpro_conf_set "XUI_PASS"          "$XUI_PASS"
+    xpro_conf_set "XUI_PORT"          "$XUI_PORT"
+    xpro_conf_set "XUI_WEB_BASE_PATH" "/${XUI_PATH}/"
+    ARG_PORT="$XUI_PORT"
+
     _step "Установка 3x-ui (${ARG_PANEL})"
     if systemctl is-active --quiet x-ui 2>/dev/null && \
        [ -f /usr/local/bin/x-ui ]; then
         echo "info: 3x-ui уже установлен и запущен — пропускаем"
         _ok "3x-ui установлен"
     else
-        install3xui "$ARG_PANEL" || _fail "Не удалось установить 3x-ui"
+        install3xui "$ARG_PANEL" "$XUI_USER" "$XUI_PASS" "$XUI_PORT" "$XUI_PATH" || _fail "Не удалось установить 3x-ui"
         _ok "3x-ui установлен"
     fi
-
-    # Ждём инициализации БД 3x-ui (credentials могут быть не готовы сразу)
-    _step "Синхронизация с БД 3x-ui"
-    xuiWaitForDB 15 || _yellow "warn: таймаут БД, credentials могут быть дефолтными"
-    _ok "БД синхронизирована"
-
-    # Читаем реальные данные из БД (единый источник правды)
-    local real_port real_user real_pass real_web_path
-    real_port=$(xuiGetPort)
-    real_user=$(xuiGetUser)
-    real_pass=$(xuiGetPass)
-    real_web_path=$(xuiGetWebBasePath)
-    ARG_PORT="$real_port"
-    _yellow "Порт панели (из БД): $ARG_PORT"
-
-    # Сохраняем в xpro.conf как кэш
-    xpro_conf_set "XUI_PORT"          "$real_port"
-    xpro_conf_set "XUI_USER"          "$real_user"
-    xpro_conf_set "XUI_PASS"          "$real_pass"
-    xpro_conf_set "XUI_WEB_BASE_PATH" "$real_web_path"
 
     # =============================================================
     # ШАГ 2 — Nginx
@@ -408,7 +403,7 @@ main() {
     if _nginx_conf_is_current "$ARG_DOMAIN"; then
         _ok "Nginx конфиг актуален — пропускаем"
     else
-        writeNginxConfig "$ARG_DOMAIN" "$ARG_CDN" || \
+        writeNginxConfig "$ARG_DOMAIN" "$ARG_CDN" "$XUI_PORT" "$XUI_PATH" || \
             _fail "Не удалось записать конфиг Nginx"
         _ok "Nginx конфиг обновлён"
     fi

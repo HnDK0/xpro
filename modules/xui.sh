@@ -13,6 +13,10 @@ XUI_SERVICE="x-ui"
 # =================================================================
 install3xui() {
     local panel="${1:-mhsanaei}"
+    local xui_user="${2:-}"
+    local xui_pass="${3:-}"
+    local xui_port="${4:-}"
+    local xui_path="${5:-}"
 
     echo "${cyan}Установка 3x-ui (${panel})...${reset}"
     [ -z "${PACKAGE_MANAGEMENT_INSTALL:-}" ] && identifyOS
@@ -34,31 +38,18 @@ install3xui() {
     sleep 3
     systemctl enable x-ui &>/dev/null
 
-    # Генерируем свои credentials и устанавливаем через x-ui setting
-    local new_user new_pass new_port new_path
-    new_user=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 8)
-    new_pass=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
-    new_port=$(generateFreePort)
-    new_path=$(generateRandomPath)
-    # Убираем обрамляющие слеши из пути для webBasePath
-    new_path="${new_path#/}"; new_path="${new_path%/}"
-
-    echo "${cyan}Настройка credentials 3x-ui...${reset}"
-    x-ui setting -username "$new_user" -password "$new_pass" \
-        -port "$new_port" -webBasePath "/${new_path}/" &>/dev/null
-
-    systemctl restart x-ui
-    sleep 2
-
-    # Сохраняем в xpro.conf
-    xpro_conf_set "XUI_USER" "$new_user"
-    xpro_conf_set "XUI_PASS" "$new_pass"
-    xpro_conf_set "XUI_PORT" "$new_port"
-    xpro_conf_set "XUI_WEB_BASE_PATH" "/${new_path}/"
+    # Перезаписываем credentials если переданы
+    if [ -n "$xui_user" ]; then
+        echo "${cyan}Настройка credentials 3x-ui...${reset}"
+        x-ui setting -username "$xui_user" -password "$xui_pass" \
+            -port "$xui_port" -webBasePath "/${xui_path}/" &>/dev/null
+        systemctl restart x-ui
+        sleep 2
+    fi
 
     echo "${green}3x-ui установлен${reset}"
-    echo "${green}  Порт: ${new_port}${reset}"
-    echo "${green}  Путь: /${new_path}/${reset}"
+    [ -n "$xui_port" ] && echo "${green}  Порт: ${xui_port}${reset}"
+    [ -n "$xui_path" ] && echo "${green}  Путь: /${xui_path}/${reset}"
 }
 
 update3xui() {
@@ -153,8 +144,8 @@ xuiWaitForDB() {
         # Первичный маркер: файл БД существует и не пустой
         if [ -f "$XUI_DB" ] && [ -s "$XUI_DB" ]; then
             local test_port test_user
-            test_port=$(xuiGetPort)
-            test_user=$(xuiGetUser)
+            test_port=$(xpro_conf_get "XUI_PORT")
+            test_user=$(xpro_conf_get "XUI_USER")
             # Порт должен быть числом, user — непустым
             if [[ "$test_port" =~ ^[0-9]+$ ]] && [ -n "$test_user" ]; then
                 echo " [OK]"
@@ -176,7 +167,7 @@ xuiWaitForDB() {
 # Получить базовый URL панели
 _xuiBaseUrl() {
     local port
-    port=$(xuiGetPort)
+    port=$(xpro_conf_get "XUI_PORT")
     echo "http://127.0.0.1:${port}"
 }
 
@@ -185,12 +176,10 @@ _XUI_COOKIE_FILE="/tmp/xpro_xui_session"
 
 xuiApiLogin() {
     local user pass base_url web_path login_url
-    user=$(xuiGetUser)
-    pass=$(xuiGetPass)
+    user=$(xpro_conf_get "XUI_USER")
+    pass=$(xpro_conf_get "XUI_PASS")
     base_url=$(_xuiBaseUrl)
-    # xuiGetWebBasePath() возвращает /path/ — убираем обрамляющие слеши,
-    # иначе URL получается http://127.0.0.1:PORT//path//login → 404.
-    web_path=$(xuiGetWebBasePath)
+    web_path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
     web_path="${web_path#/}"; web_path="${web_path%/}"
 
     # Путь логина зависит от WebBasePath
@@ -224,7 +213,7 @@ _xuiApiCall() {
     local data="${3:-}"
     local base_url web_path
     base_url=$(_xuiBaseUrl)
-    web_path=$(xuiGetWebBasePath)
+    web_path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
     web_path="${web_path#/}"; web_path="${web_path%/}"
 
     # Если cookie нет — логинимся
@@ -358,10 +347,10 @@ manage3xuiMenu() {
     while true; do
         clear
         local port user status web_path panel_url
-        port=$(xuiGetPort)
-        user=$(xuiGetUser)
+        port=$(xpro_conf_get "XUI_PORT")
+        user=$(xpro_conf_get "XUI_USER")
         status=$(getServiceStatus x-ui)
-        web_path=$(xuiGetWebBasePath)
+        web_path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
         local domain
         domain=$(xpro_conf_get "DOMAIN")
 
@@ -404,10 +393,10 @@ manage3xuiMenu() {
                 ;;
             3)
                 echo ""
-                echo "  URL:     https://${domain}/xui/"
-                echo "  Логин:   $(xuiGetUser)"
-                echo "  Пароль:  $(xuiGetPass)"
-                echo "  Порт:    $(xuiGetPort)"
+                echo "  URL:     https://${domain}/${web_path}/"
+                echo "  Логин:   $(xpro_conf_get XUI_USER)"
+                echo "  Пароль:  $(xpro_conf_get XUI_PASS)"
+                echo "  Порт:    $(xpro_conf_get XUI_PORT)"
                 read -r
                 ;;
             4)

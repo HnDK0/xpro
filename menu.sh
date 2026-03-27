@@ -61,7 +61,7 @@ show_status() {
 
     local domain web_path panel_url
     domain=$(xpro_conf_get "DOMAIN" 2>/dev/null || echo "не задан")
-    web_path=$(xuiGetWebBasePath 2>/dev/null || echo "")
+    web_path=$(xpro_conf_get "XUI_WEB_BASE_PATH" 2>/dev/null || echo "")
     # Убираем обрамляющие слеши из пути для корректного URL
     web_path="${web_path#/}"; web_path="${web_path%/}"
     if [ -n "$web_path" ]; then
