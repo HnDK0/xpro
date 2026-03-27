@@ -41,8 +41,8 @@ install3xui() {
     # Перезаписываем credentials если переданы
     if [ -n "$xui_user" ]; then
         echo "${cyan}Настройка credentials 3x-ui...${reset}"
-        x-ui setting -username "$xui_user" -password "$xui_pass" \
-            -port "$xui_port" -webBasePath "/${xui_path}/" &>/dev/null
+        /usr/local/x-ui/x-ui setting -username "$xui_user" -password "$xui_pass" \
+            -port "$xui_port" -webBasePath "$xui_path" &>/dev/null
         systemctl restart x-ui
         sleep 2
     fi
@@ -354,8 +354,10 @@ manage3xuiMenu() {
         local domain
         domain=$(xpro_conf_get "DOMAIN")
 
-        if [ -n "$web_path" ]; then
-            panel_url="https://${domain}/${web_path}/"
+        # Убираем trailing slash для URL чтобы не было //
+        local web_path_display="${web_path#/}"; web_path_display="${web_path_display%/}"
+        if [ -n "$web_path_display" ]; then
+            panel_url="https://${domain}/${web_path_display}"
         else
             panel_url="https://${domain}/  ${yellow}(путь не определён)${reset}"
         fi
@@ -393,7 +395,7 @@ manage3xuiMenu() {
                 ;;
             3)
                 echo ""
-                echo "  URL:     https://${domain}/${web_path}/"
+                echo "  URL:     https://${domain}/${web_path_display}/"
                 echo "  Логин:   $(xpro_conf_get XUI_USER)"
                 echo "  Пароль:  $(xpro_conf_get XUI_PASS)"
                 echo "  Порт:    $(xpro_conf_get XUI_PORT)"

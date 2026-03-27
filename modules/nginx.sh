@@ -99,9 +99,9 @@ writeNginxConfig() {
     local fake_host
     fake_host=$(echo "$fake_url" | sed 's|https://||;s|http://||;s|/.*||')
 
-    # Очищаем web_path от ANSI escape кодов и trailing slash
+    # Очищаем web_path от ANSI escape кодов и leading slash
     web_path=$(echo "$web_path" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
-    web_path="${web_path#/}"; web_path="${web_path%/}"
+    web_path="${web_path#/}"
     [ -z "$web_path" ] && web_path=""
 
     # nginx.conf главный
