@@ -82,13 +82,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) 
 ### Полная автоматическая установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) \
-  -domain example.com \
-  -ufw on \
-  -bbr on \
-  -ssl-method 1 \
-  -cf-email user@example.com \
-  -cf-key your_cloudflare_api_key
+bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -ufw on -bbr on -ssl-method 1 -cf-email user@example.com -cf-key your_cloudflare_api_key
 ```
 
 ### После установки
