@@ -184,6 +184,116 @@ gen_random_port() {
 }
 
 # =================================================================
+# IDEMPOTENCY HELPERS — проверки "уже сделано?"
+# Каждая функция возвращает 0 (уже готово, пропустить)
+# или 1 (нужно выполнить).
+# =================================================================
+
+# SSL — самая критичная проверка, используем двойную верификацию:
+#   1. openssl проверяет файл cert.pem: домен в CN/SAN, срок, не self-signed
+#   2. acme.sh --list подтверждает что сертификат управляется acme.sh
+#      (т.е. будет автоматически продляться)
+# Если хоть одна проверка падает — SSL нужно настраивать.
+_ssl_is_done() {
+    local domain="$1"
+    local cert="${NGINX_CERT_DIR:-/etc/nginx/cert}/cert.pem"
+
+    # Нет файла сертификата
+    [ -f "$cert" ] || return 1
+
+    # Проверяем что это Let's Encrypt, а не self-signed заглушка
+    # _setDefaultCert() создаёт сертификат с CN=localhost — его пропускаем
+    if ! openssl x509 -noout -issuer -in "$cert" 2>/dev/null \
+            | grep -qi "Let.s Encrypt\|R3\|R10\|R11\|E1\|E2"; then
+        echo "info: SSL: найден self-signed сертификат, нужен реальный"
+        return 1
+    fi
+
+    # Домен совпадает с запрошенным (CN или SAN)
+    if ! openssl x509 -noout -text -in "$cert" 2>/dev/null \
+            | grep -qE "(CN\s*=\s*|DNS:).*${domain}"; then
+        echo "info: SSL: сертификат выдан для другого домена"
+        return 1
+    fi
+
+    # Не истекает в ближайшие 14 дней
+    if ! openssl x509 -noout -checkend $((14 * 86400)) -in "$cert" 2>/dev/null; then
+        echo "info: SSL: сертификат истекает менее чем через 14 дней"
+        return 1
+    fi
+
+    # acme.sh знает об этом домене (будет продлевать)
+    if [ -f ~/.acme.sh/acme.sh ]; then
+        if ! ~/.acme.sh/acme.sh --list 2>/dev/null | grep -qF "$domain"; then
+            echo "info: SSL: acme.sh не управляет доменом ${domain}, нужна регистрация"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Nginx конфиг — проверяем что xpro.conf существует и содержит нужный домен
+_nginx_conf_is_done() {
+    local domain="$1"
+    local xpro_conf="${NGINX_CONF_DIR:-/etc/nginx/conf.d}/xpro.conf"
+    [ -f "$xpro_conf" ] || return 1
+    grep -qF "server_name ${domain}" "$xpro_conf" 2>/dev/null || return 1
+    # Nginx должен быть запущен и конфиг валиден
+    nginx -t &>/dev/null || return 1
+    return 0
+}
+
+# CF Real IP — проверяем что файл существует и не старше 7 дней
+_cf_realip_is_done() {
+    local cf_file="${NGINX_CONF_DIR:-/etc/nginx/conf.d}/real_ip_restore.conf"
+    [ -f "$cf_file" ] || return 1
+    # Файл должен содержать реальные IP диапазоны (не пустой)
+    grep -q "set_real_ip_from" "$cf_file" 2>/dev/null || return 1
+    # Не старше 7 дней
+    if find "$cf_file" -mtime +7 2>/dev/null | grep -q .; then
+        echo "info: CF Real IP: файл старше 7 дней, обновляем"
+        return 1
+    fi
+    return 0
+}
+
+# Fail2Ban — проверяем что jail.local настроен нами (есть наша секция [sshd])
+# и сервис запущен
+_fail2ban_is_done() {
+    [ -f /etc/fail2ban/jail.local ] || return 1
+    # Проверяем что конфиг содержит наши настройки (bantime = 24h для sshd)
+    grep -q "bantime  = 24h" /etc/fail2ban/jail.local 2>/dev/null || return 1
+    systemctl is-active --quiet fail2ban 2>/dev/null || return 1
+    return 0
+}
+
+# UFW — проверяем что UFW активен и содержит наши базовые правила.
+# НЕ пропускаем если UFW выключен (inactive) — значит setupUFW не запускался.
+_ufw_is_done() {
+    local xui_port="$1"
+    local cdn="$2"
+    # UFW должен быть активен
+    ufw status 2>/dev/null | grep -q "^Status: active" || return 1
+    # Правило HTTPS должно быть
+    ufw status 2>/dev/null | grep -q "443" || return 1
+    # Если не CDN — правило для порта панели должно быть
+    if [ "$cdn" != "on" ] && [ -n "$xui_port" ]; then
+        ufw status 2>/dev/null | grep -q "$xui_port" || return 1
+    fi
+    return 0
+}
+
+# Sysctl — проверяем что наш файл уже существует с нужным содержимым
+_sysctl_is_done() {
+    local f="/etc/sysctl.d/99-xpro.conf"
+    [ -f "$f" ] || return 1
+    grep -q "somaxconn" "$f" 2>/dev/null || return 1
+    grep -q "tcp_keepalive" "$f" 2>/dev/null || return 1
+    return 0
+}
+
+# =================================================================
 # ОСНОВНОЙ УСТАНОВЩИК
 # =================================================================
 main() {
@@ -257,46 +367,68 @@ EOF
     # ШАГ 3 — SSL
     # =============================================================
     _step "Настройка SSL для ${ARG_DOMAIN}"
-    configSSL "$ARG_DOMAIN" "$ARG_CDN" || _fail "Не удалось настроить SSL"
-    _ok "SSL настроен"
+    if _ssl_is_done "$ARG_DOMAIN"; then
+        _ok "SSL уже настроен — пропускаем"
+    else
+        configSSL "$ARG_DOMAIN" "$ARG_CDN" || _fail "Не удалось настроить SSL"
+        _ok "SSL настроен"
+    fi
 
     # =============================================================
     # ШАГ 4 — Фейковый сайт (ДО writeNginxConfig — URL должен быть в конфиге)
     # =============================================================
     if [[ "$ARG_FAKE" == "yes" ]]; then
         _step "Выбор фейкового сайта"
-        setFakeSite "random"
-        _ok "Фейковый сайт: $(xpro_conf_get FAKE_SITE_URL)"
+        if [ -n "$(xpro_conf_get FAKE_SITE_URL 2>/dev/null)" ]; then
+            _ok "Фейковый сайт уже выбран: $(xpro_conf_get FAKE_SITE_URL) — пропускаем"
+        else
+            setFakeSite "random"
+            _ok "Фейковый сайт: $(xpro_conf_get FAKE_SITE_URL)"
+        fi
     fi
 
     # =============================================================
     # ШАГ 5 — Nginx конфиг (cert и fake_url уже готовы)
     # =============================================================
     _step "Настройка Nginx reverse proxy"
-    writeNginxConfig "$ARG_DOMAIN" "$ARG_PORT" "$ARG_CDN" || \
-        _fail "Не удалось записать конфиг Nginx"
-    _ok "Nginx конфиг записан"
+    if _nginx_conf_is_done "$ARG_DOMAIN"; then
+        _ok "Nginx конфиг уже настроен для ${ARG_DOMAIN} — пропускаем"
+    else
+        writeNginxConfig "$ARG_DOMAIN" "$ARG_PORT" "$ARG_CDN" || \
+            _fail "Не удалось записать конфиг Nginx"
+        _ok "Nginx конфиг записан"
+    fi
 
     # =============================================================
     # ШАГ 6 — Cloudflare Real IP
     # =============================================================
     _step "Настройка Cloudflare Real IP"
-    setupRealIpRestore || _yellow "warn: Не удалось получить CF IP диапазоны"
-    setupCfIpCron
-    _ok "CF Real IP настроен"
+    if _cf_realip_is_done; then
+        _ok "CF Real IP уже настроен — пропускаем"
+    else
+        setupRealIpRestore || _yellow "warn: Не удалось получить CF IP диапазоны"
+        setupCfIpCron
+        _ok "CF Real IP настроен"
+    fi
 
     # =============================================================
     # ШАГ 7 — WARP
     # =============================================================
     if [[ "$ARG_WARP" == "yes" ]]; then
         _step "Установка Cloudflare WARP"
-        installWarp || _fail "Не удалось установить WARP"
-        configWarp
-        sleep 3
-        addWarpOutbound || \
-            _yellow "warn: Outbound WARP — добавь вручную: xpro → WARP → Добавить outbound"
-        xpro_conf_set "WARP_INSTALLED" "yes"
-        _ok "WARP установлен (socks5://127.0.0.1:40000)"
+        if command -v warp-cli &>/dev/null && \
+           systemctl is-active --quiet warp-svc 2>/dev/null && \
+           [ "$(xpro_conf_get WARP_INSTALLED)" = "yes" ]; then
+            _ok "WARP уже установлен и запущен — пропускаем"
+        else
+            installWarp || _fail "Не удалось установить WARP"
+            configWarp
+            sleep 3
+            addWarpOutbound || \
+                _yellow "warn: Outbound WARP — добавь вручную: xpro → WARP → Добавить outbound"
+            xpro_conf_set "WARP_INSTALLED" "yes"
+            _ok "WARP установлен (socks5://127.0.0.1:40000)"
+        fi
     else
         xpro_conf_set "WARP_INSTALLED" "no"
     fi
@@ -306,15 +438,21 @@ EOF
     # =============================================================
     if [[ "$ARG_TOR" == "yes" ]]; then
         _step "Установка Tor"
-        installTor || _fail "Не удалось установить Tor"
-        configTor
-        startTor
-        enableTor
-        sleep 3
-        addTorOutbound || \
-            _yellow "warn: Outbound Tor — добавь вручную: xpro → Tor → Добавить outbound"
-        xpro_conf_set "TOR_INSTALLED" "yes"
-        _ok "Tor установлен (socks5://127.0.0.1:40003)"
+        if command -v tor &>/dev/null && \
+           systemctl is-active --quiet tor 2>/dev/null && \
+           [ "$(xpro_conf_get TOR_INSTALLED)" = "yes" ]; then
+            _ok "Tor уже установлен и запущен — пропускаем"
+        else
+            installTor || _fail "Не удалось установить Tor"
+            configTor
+            startTor
+            enableTor
+            sleep 3
+            addTorOutbound || \
+                _yellow "warn: Outbound Tor — добавь вручную: xpro → Tor → Добавить outbound"
+            xpro_conf_set "TOR_INSTALLED" "yes"
+            _ok "Tor установлен (socks5://127.0.0.1:40003)"
+        fi
     else
         xpro_conf_set "TOR_INSTALLED" "no"
     fi
@@ -324,50 +462,73 @@ EOF
     # =============================================================
     if [[ "$ARG_PSIPHON" == "yes" ]]; then
         _step "Установка Psiphon"
-        installPsiphon || _fail "Не удалось установить Psiphon"
-        writePsiphonConfig "" "plain"
-        writePsiphonService
-        startPsiphon
-        enablePsiphon
-        sleep 5
-        addPsiphonOutbound || \
-            _yellow "warn: Outbound Psiphon — добавь вручную: xpro → Psiphon → Добавить outbound"
-        xpro_conf_set "PSIPHON_INSTALLED" "yes"
-        _ok "Psiphon установлен (socks5://127.0.0.1:40002)"
+        if [ -f /usr/local/bin/psiphon-tunnel-core ] && \
+           systemctl is-active --quiet psiphon 2>/dev/null && \
+           [ "$(xpro_conf_get PSIPHON_INSTALLED)" = "yes" ]; then
+            _ok "Psiphon уже установлен и запущен — пропускаем"
+        else
+            installPsiphon || _fail "Не удалось установить Psiphon"
+            writePsiphonConfig "" "plain"
+            writePsiphonService
+            startPsiphon
+            enablePsiphon
+            sleep 5
+            addPsiphonOutbound || \
+                _yellow "warn: Outbound Psiphon — добавь вручную: xpro → Psiphon → Добавить outbound"
+            xpro_conf_set "PSIPHON_INSTALLED" "yes"
+            _ok "Psiphon установлен (socks5://127.0.0.1:40002)"
+        fi
     else
         xpro_conf_set "PSIPHON_INSTALLED" "no"
     fi
 
     # =============================================================
     # ШАГ 10 — BBR
+    # BBR уже имеет проверку внутри enableBBR(), но делаем step-уровень
     # =============================================================
     if [[ "$ARG_BBR" == "yes" ]]; then
         _step "Включение BBR"
-        enableBBR
-        _ok "BBR включён"
+        if [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = "bbr" ]; then
+            _ok "BBR уже активен — пропускаем"
+        else
+            enableBBR
+            _ok "BBR включён"
+        fi
     fi
 
     # =============================================================
     # ШАГ 11 — Sysctl
     # =============================================================
     _step "Применение sysctl оптимизаций"
-    applySysctl
-    _ok "Sysctl применён"
+    if _sysctl_is_done; then
+        _ok "Sysctl уже применён — пропускаем"
+    else
+        applySysctl
+        _ok "Sysctl применён"
+    fi
 
     # =============================================================
     # ШАГ 12 — Fail2Ban
     # =============================================================
     _step "Настройка Fail2Ban"
-    setupFail2Ban
-    _ok "Fail2Ban настроен"
+    if _fail2ban_is_done; then
+        _ok "Fail2Ban уже настроен — пропускаем"
+    else
+        setupFail2Ban
+        _ok "Fail2Ban настроен"
+    fi
 
     # =============================================================
     # ШАГ 13 — UFW
     # =============================================================
     if [[ "$ARG_UFW" == "on" ]]; then
         _step "Настройка UFW"
-        setupUFW "$ARG_PORT" "$ARG_CDN"
-        _ok "UFW настроен"
+        if _ufw_is_done "$ARG_PORT" "$ARG_CDN"; then
+            _ok "UFW уже настроен — пропускаем"
+        else
+            setupUFW "$ARG_PORT" "$ARG_CDN"
+            _ok "UFW настроен"
+        fi
     fi
 
     # =============================================================
