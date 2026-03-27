@@ -16,12 +16,14 @@ TOR_CONTROL_PORT=40004
 
 # =================================================================
 # ЦВЕТА
+# Используем жёсткие ANSI-коды вместо tput — работают всегда,
+# даже при запуске через bash <(curl ...) до инициализации терминала.
 # =================================================================
-red=$(tput setaf 1 2>/dev/null)$(tput bold 2>/dev/null)
-green=$(tput setaf 2 2>/dev/null)$(tput bold 2>/dev/null)
-yellow=$(tput setaf 3 2>/dev/null)$(tput bold 2>/dev/null)
-cyan=$(tput setaf 6 2>/dev/null)$(tput bold 2>/dev/null)
-reset=$(tput sgr0 2>/dev/null)
+red=$'\033[1;31m'
+green=$'\033[1;32m'
+yellow=$'\033[1;33m'
+cyan=$'\033[1;36m'
+reset=$'\033[0m'
 
 # =================================================================
 # XPRO.CONF — get / set / del
