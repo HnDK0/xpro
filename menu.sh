@@ -43,75 +43,124 @@ _status_line() {
 
 # =================================================================
 # ГЛАВНЫЙ ЭКРАН — статус всех сервисов
+#
+# Ширина бокса: 44 символа содержимого между ║ и ║
+# Формат строки: "║  " + контент + пробелы до 44 + "║"
+# Используем _pad() для строк с ANSI-цветами — иначе printf
+# считает escape-коды как печатные символы и ломает выравнивание.
 # =================================================================
+
+# Ширина содержимого между ║..║ (не считая самих ║)
+_BOX_W=44
+
+# Печатает одну строку бокса: ║  LABEL   VALUE  ║
+# Все значения с цветом передаём через _pad чтобы ANSI не ломал ширину
+_box_row() {
+    local label="$1"   # без цвета, макс ~10 символов
+    local value="$2"   # может содержать ANSI
+    # Видимая длина label (без ANSI, на случай если передадут с цветом)
+    local label_vis
+    label_vis=$(printf '%s' "$label" | sed 's/\x1b\[[0-9;]*[mABCDJKHf]//g; s/\x1b(B//g')
+    # Видимая длина value
+    local value_vis
+    value_vis=$(printf '%s' "$value" | sed 's/\x1b\[[0-9;]*[mABCDJKHf]//g; s/\x1b(B//g')
+    # Отступ слева: 2 пробела. Ширина label колонки: 10. Разделитель: 2 пробела.
+    # Итого фиксированная часть: 2 + 10 + 2 = 14. Остаток на value + padding: BOX_W - 14 - 2(правый отступ)
+    local col_label=10
+    local left_pad=2
+    local right_pad=2
+    local val_room=$(( _BOX_W - left_pad - col_label - 2 - right_pad ))
+    # padding после value
+    local pad_len=$(( val_room - ${#value_vis} ))
+    [ $pad_len -lt 0 ] && pad_len=0
+    printf "${cyan}║${reset}%${left_pad}s%-${col_label}s  %s%${pad_len}s  ${cyan}║${reset}\n" \
+        "" "$label_vis" "$value" ""
+}
+
+# Пустая строка бокса
+_box_empty() {
+    printf "${cyan}║${reset}%$(( _BOX_W ))s${cyan}║${reset}\n" ""
+}
+
 show_status() {
     clear
 
-    # Получаем данные
+    # Собираем все данные заранее
     local server_ip country_code flag
     server_ip=$(getServerIP 2>/dev/null || echo "...")
     country_code=$(getCountryCode "$server_ip" 2>/dev/null || echo "??")
     flag=$(getCountryFlag "$country_code" 2>/dev/null || echo "🌐")
 
-    local domain xui_port web_path panel_url
+    local domain web_path panel_url
     domain=$(xpro_conf_get "DOMAIN" 2>/dev/null || echo "не задан")
-    xui_port=$(xuiGetPort 2>/dev/null || echo "?")
     web_path=$(xuiGetWebBasePath 2>/dev/null || echo "")
     if [ -n "$web_path" ]; then
         panel_url="${domain}/${web_path}"
     else
-        panel_url="${domain}/???"
+        panel_url="$domain"
     fi
 
-    local xui_status nginx_status
-    xui_status=$(getServiceStatus "x-ui" 2>/dev/null)
+    local xui_status nginx_status cert_expiry
+    xui_status=$(getServiceStatus "x-ui"   2>/dev/null)
     nginx_status=$(getServiceStatus "nginx" 2>/dev/null)
+    cert_expiry=$(checkCertExpiry          2>/dev/null || echo "${red}?${reset}")
 
-    local cert_expiry
-    cert_expiry=$(checkCertExpiry 2>/dev/null || echo "${red}?${reset}")
+    # SSH порт
+    local ssh_port
+    ssh_port=$(grep -E "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
+    ssh_port="${ssh_port:-22}"
 
-    echo ""
-    echo "${cyan}╔══════════════════════════════════════════╗${reset}"
-    printf "${cyan}║${reset}  X-UI PRO v%-5s  ${cyan}|${reset}  %s  %-15s${cyan}║${reset}\n" \
-        "$XPRO_VERSION" "$flag" "$server_ip"
-    echo "${cyan}╠══════════════════════════════════════════╣${reset}"
-    echo "${cyan}║${reset}                                          ${cyan}║${reset}"
-
-    # 3x-ui
-    printf "${cyan}║${reset}  %-10s  %s   (%s)%*s${cyan}║${reset}\n" \
-        "3x-ui" "$xui_status" "$panel_url" \
-        $((16 - ${#panel_url})) ""
-
-    # Nginx + SSL
-    printf "${cyan}║${reset}  %-10s  %s   SSL: %s%*s${cyan}║${reset}\n" \
-        "Nginx" "$nginx_status" "$cert_expiry" 8 ""
-
-    echo "${cyan}║${reset}                                          ${cyan}║${reset}"
-    echo "${cyan}╠══════════════════════════════════════════╣${reset}"
-
-    # WARP
-    local warp_s="—"
+    # Статусы туннелей
+    local warp_s tor_s psiphon_s
     if [ "$(xpro_conf_get WARP_INSTALLED)" = "yes" ]; then
-        warp_s=$(getWarpStatus 2>/dev/null || echo "${red}?${reset}")
+        warp_s=$(getWarpStatus    2>/dev/null || echo "${red}?${reset}")
+    else
+        warp_s="${red}не установлен${reset}"
     fi
-    printf "${cyan}║${reset}  %-10s  %-30s${cyan}║${reset}\n" "WARP" "$warp_s"
-
-    # Tor
-    local tor_s="—"
     if [ "$(xpro_conf_get TOR_INSTALLED)" = "yes" ]; then
-        tor_s=$(getTorStatus 2>/dev/null || echo "${red}?${reset}")
+        tor_s=$(getTorStatus      2>/dev/null || echo "${red}?${reset}")
+    else
+        tor_s="${red}не установлен${reset}"
     fi
-    printf "${cyan}║${reset}  %-10s  %-30s${cyan}║${reset}\n" "Tor" "$tor_s"
-
-    # Psiphon
-    local psiphon_s="—"
     if [ "$(xpro_conf_get PSIPHON_INSTALLED)" = "yes" ]; then
         psiphon_s=$(getPsiphonStatus 2>/dev/null || echo "${red}?${reset}")
+    else
+        psiphon_s="${red}не установлен${reset}"
     fi
-    printf "${cyan}║${reset}  %-10s  %-30s${cyan}║${reset}\n" "Psiphon" "$psiphon_s"
 
-    echo "${cyan}║${reset}                                          ${cyan}║${reset}"
-    echo "${cyan}╚══════════════════════════════════════════╝${reset}"
+    # Строим бокс
+    # Заголовок: версия | флаг IP  (без _box_row — особый формат)
+    local hdr_left="X-UI PRO v${XPRO_VERSION}"
+    local hdr_right="${flag}  ${server_ip}"
+    local hdr_right_vis="${flag}  ${server_ip}"   # нет ANSI
+    local hdr_left_vis="$hdr_left"
+    local sep="  │  "
+    local hdr_content="${hdr_left_vis}${sep}${hdr_right_vis}"
+    local hdr_pad=$(( _BOX_W - ${#hdr_content} ))
+    [ $hdr_pad -lt 0 ] && hdr_pad=0
+
+    echo ""
+    echo "${cyan}╔$(printf '═%.0s' $(seq 1 $_BOX_W))╗${reset}"
+    printf "${cyan}║${reset}  %s%s%s%${hdr_pad}s  ${cyan}║${reset}\n" \
+        "$hdr_left" "$sep" "$hdr_right" ""
+    echo "${cyan}╠$(printf '═%.0s' $(seq 1 $_BOX_W))╣${reset}"
+    _box_empty
+
+    # Сервисы
+    _box_row "3x-ui"  "$xui_status    ${cyan}${panel_url}${reset}"
+    _box_row "Nginx"  "$nginx_status  SSL: $cert_expiry"
+    _box_row "SSH"    "${green}port ${ssh_port}${reset}"
+
+    _box_empty
+    echo "${cyan}╠$(printf '═%.0s' $(seq 1 $_BOX_W))╣${reset}"
+
+    # Туннели
+    _box_row "WARP"    "$warp_s"
+    _box_row "Tor"     "$tor_s"
+    _box_row "Psiphon" "$psiphon_s"
+
+    _box_empty
+    echo "${cyan}╚$(printf '═%.0s' $(seq 1 $_BOX_W))╝${reset}"
     echo ""
 }
 

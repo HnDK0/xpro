@@ -405,7 +405,7 @@ SYSCTL
 securityMenu() {
     while true; do
         clear
-        local bbr_s f2b_s webjail_s ufw_s ipv6_s cpuguard_s cfguard_s
+        local bbr_s f2b_s webjail_s ufw_s ipv6_s cpuguard_s cfguard_s ssh_port
         bbr_s=$(getBbrStatus)
         f2b_s=$(getF2BStatus)
         webjail_s=$(getWebJailStatus)
@@ -413,12 +413,16 @@ securityMenu() {
         ipv6_s=$(getIPv6Status)
         cpuguard_s=$(getCpuGuardStatus)
         cfguard_s=$(getCfGuardStatus 2>/dev/null || echo "${red}OFF${reset}")
+        ssh_port=$(grep -E "^Port " /etc/ssh/sshd_config 2>/dev/null | \
+            awk '{print $2}' | head -1)
+        ssh_port="${ssh_port:-22}"
 
         echo ""
         echo "${cyan}══════════════════════════════════════${reset}"
         echo "${cyan}  Безопасность${reset}"
         echo "${cyan}══════════════════════════════════════${reset}"
         echo ""
+        echo "  SSH порт:   ${green}${ssh_port}${reset}"
         echo "  BBR:        $bbr_s"
         echo "  Fail2Ban:   $f2b_s"
         echo "  WebJail:    $webjail_s"
