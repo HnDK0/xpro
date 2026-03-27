@@ -1,10 +1,10 @@
-# X-UI PRO
+# X-PRO
 
 Автоматизированный установщик и менеджер для [3x-ui (MHSanaei)](https://github.com/MHSanaei/3x-ui) с поддержкой Cloudflare WARP, Tor, Psiphon, Nginx reverse proxy, SSL и набором инструментов безопасности.
 
 ```
 ╔══════════════════════════════════════════╗
-║  X-UI PRO v1.0  |  🇩🇪  1.2.3.4         ║
+║  X-PRO v1.0  |  🇩🇪  1.2.3.4         ║
 ╠══════════════════════════════════════════╣
 ║                                          ║
 ║  3x-ui     RUNNING   (example.com)       ║
