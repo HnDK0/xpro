@@ -308,12 +308,14 @@ EOF
     echo ""
     echo "  Панель:   $ARG_PANEL"
     echo "  Домен:    $ARG_DOMAIN"
+    echo "  Порт:     ${ARG_PORT:-random}"
     echo "  CDN:      $ARG_CDN"
     echo "  WARP:     $ARG_WARP"
     echo "  Tor:      $ARG_TOR"
     echo "  Psiphon:  $ARG_PSIPHON"
     echo "  UFW:      $ARG_UFW"
     echo "  BBR:      $ARG_BBR"
+    echo "  Fake:     $ARG_FAKE"
     echo ""
 
     _step "Проверка требований"
@@ -343,18 +345,33 @@ EOF
     # ШАГ 1 — 3x-ui
     # =============================================================
     _step "Установка 3x-ui (${ARG_PANEL})"
-    install3xui "$ARG_PANEL" "$ARG_PORT" || _fail "Не удалось установить 3x-ui"
-    _ok "3x-ui установлен"
+    if systemctl is-active --quiet x-ui 2>/dev/null && \
+       [ -f /usr/local/bin/x-ui ]; then
+        echo "info: 3x-ui уже установлен и запущен — пропускаем"
+        _ok "3x-ui установлен"
+    else
+        install3xui "$ARG_PANEL" "$ARG_PORT" || _fail "Не удалось установить 3x-ui"
+        _ok "3x-ui установлен"
+    fi
 
-    # Читаем реальный порт — установщик 3x-ui мог назначить свой
+    # Читаем реальный порт из БД — установщик 3x-ui мог назначить свой
     local real_port
     real_port=$(xuiGetPort)
-    xpro_conf_set "XUI_PORT" "$real_port"
     ARG_PORT="$real_port"
     _yellow "Порт панели (из БД): $ARG_PORT"
 
-    xpro_conf_set "XUI_USER" "$(xuiGetUser)"
-    xpro_conf_set "XUI_PASS" "$(xuiGetPass)"
+    # Принудительно читаем credentials из БД (не из кэша xpro.conf)
+    # Это гарантирует что мы видим рандомные данные которые 3x-ui сгенерировал
+    local real_user real_pass real_web_path
+    real_user=$(xuiGetUser)
+    real_pass=$(xuiGetPass)
+    real_web_path=$(xuiGetWebBasePath)
+
+    # Сохраняем в xpro.conf как кэш
+    xpro_conf_set "XUI_PORT"          "$real_port"
+    xpro_conf_set "XUI_USER"          "$real_user"
+    xpro_conf_set "XUI_PASS"          "$real_pass"
+    xpro_conf_set "XUI_WEB_BASE_PATH" "$real_web_path"
 
     # =============================================================
     # ШАГ 2 — Nginx
@@ -379,8 +396,11 @@ EOF
     # =============================================================
     if [[ "$ARG_FAKE" == "yes" ]]; then
         _step "Выбор фейкового сайта"
-        if [ -n "$(xpro_conf_get FAKE_SITE_URL 2>/dev/null)" ]; then
-            _ok "Фейковый сайт уже выбран: $(xpro_conf_get FAKE_SITE_URL) — пропускаем"
+        # Пропускаем только если nginx конфиг уже существует для этого домена
+        # (т.е. writeNginxConfig уже отработал с каким-то сайтом).
+        # При свежей установке или смене домена — всегда выбираем рандомный.
+        if _nginx_conf_is_done "$ARG_DOMAIN"; then
+            _ok "Фейковый сайт: $(xpro_conf_get FAKE_SITE_URL) — nginx уже настроен, пропускаем"
         else
             setFakeSite "random"
             _ok "Фейковый сайт: $(xpro_conf_get FAKE_SITE_URL)"
@@ -549,20 +569,27 @@ EOF
 # которые могут вернуть ненулевой код и уронить скрипт
 # =================================================================
 print_summary() {
-    local domain xui_user xui_pass xui_port server_ip ssl_info
-    domain=$(xpro_conf_get "DOMAIN"   2>/dev/null || echo "$ARG_DOMAIN")
-    xui_user=$(xpro_conf_get "XUI_USER" 2>/dev/null || echo "admin")
-    xui_pass=$(xpro_conf_get "XUI_PASS" 2>/dev/null || echo "admin")
-    xui_port=$(xpro_conf_get "XUI_PORT" 2>/dev/null || echo "$ARG_PORT")
+    local domain xui_user xui_pass xui_port xui_path server_ip ssl_info panel_url
+    domain=$(xpro_conf_get "DOMAIN"          2>/dev/null || echo "$ARG_DOMAIN")
+    xui_user=$(xpro_conf_get "XUI_USER"      2>/dev/null || echo "?")
+    xui_pass=$(xpro_conf_get "XUI_PASS"      2>/dev/null || echo "?")
+    xui_port=$(xpro_conf_get "XUI_PORT"      2>/dev/null || echo "$ARG_PORT")
+    xui_path=$(xpro_conf_get "XUI_WEB_BASE_PATH" 2>/dev/null || echo "")
     server_ip=$(getServerIP 2>/dev/null || echo "?")
     ssl_info=$(checkCertExpiry 2>/dev/null || echo "?")
+
+    if [ -n "$xui_path" ]; then
+        panel_url="${domain}/${xui_path}/"
+    else
+        panel_url="${domain}/  (путь не определён — проверь xpro)"
+    fi
 
     echo ""
     echo "╔═══════════════════════════════════════════════╗"
     echo "║         X-UI PRO — Установка завершена        ║"
     echo "╠═══════════════════════════════════════════════╣"
     printf "║  %-45s║\n" ""
-    printf "║  Панель:  https://%-27s║\n" "${domain}/xui/"
+    printf "║  Панель:  https://%-27s║\n" "${panel_url}"
     printf "║  IP:      %-35s║\n" "$server_ip"
     printf "║  Логин:   %-35s║\n" "$xui_user"
     printf "║  Пароль:  %-35s║\n" "$xui_pass"

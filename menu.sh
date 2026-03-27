@@ -53,9 +53,15 @@ show_status() {
     country_code=$(getCountryCode "$server_ip" 2>/dev/null || echo "??")
     flag=$(getCountryFlag "$country_code" 2>/dev/null || echo "🌐")
 
-    local domain xui_port
+    local domain xui_port web_path panel_url
     domain=$(xpro_conf_get "DOMAIN" 2>/dev/null || echo "не задан")
     xui_port=$(xuiGetPort 2>/dev/null || echo "?")
+    web_path=$(xuiGetWebBasePath 2>/dev/null || echo "")
+    if [ -n "$web_path" ]; then
+        panel_url="${domain}/${web_path}"
+    else
+        panel_url="${domain}/???"
+    fi
 
     local xui_status nginx_status
     xui_status=$(getServiceStatus "x-ui" 2>/dev/null)
@@ -73,8 +79,8 @@ show_status() {
 
     # 3x-ui
     printf "${cyan}║${reset}  %-10s  %s   (%s)%*s${cyan}║${reset}\n" \
-        "3x-ui" "$xui_status" "$domain" \
-        $((16 - ${#domain})) ""
+        "3x-ui" "$xui_status" "$panel_url" \
+        $((16 - ${#panel_url})) ""
 
     # Nginx + SSL
     printf "${cyan}║${reset}  %-10s  %s   SSL: %s%*s${cyan}║${reset}\n" \

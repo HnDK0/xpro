@@ -104,27 +104,42 @@ xuiGetPort() {
 }
 
 xuiGetUser() {
-    local user
-    user=$(xpro_conf_get "XUI_USER")
-    [ -n "$user" ] && { echo "$user"; return; }
-
+    # БД — источник правды. xpro.conf только кэш для случаев когда БД недоступна.
+    local user=""
     if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
         user=$(sqlite3 "$XUI_DB" \
             "SELECT username FROM users LIMIT 1;" 2>/dev/null)
     fi
+    # Фалбек на кэш
+    [ -z "$user" ] && user=$(xpro_conf_get "XUI_USER")
     echo "${user:-admin}"
 }
 
 xuiGetPass() {
-    local pass
-    pass=$(xpro_conf_get "XUI_PASS")
-    [ -n "$pass" ] && { echo "$pass"; return; }
-
+    # БД — источник правды.
+    local pass=""
     if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
         pass=$(sqlite3 "$XUI_DB" \
             "SELECT password FROM users LIMIT 1;" 2>/dev/null)
     fi
+    [ -z "$pass" ] && pass=$(xpro_conf_get "XUI_PASS")
     echo "${pass:-admin}"
+}
+
+# WebBasePath — рандомный путь панели (генерируется 3x-ui при установке)
+xuiGetWebBasePath() {
+    local path=""
+    # Читаем из БД
+    if command -v sqlite3 &>/dev/null && [ -f "$XUI_DB" ]; then
+        path=$(sqlite3 "$XUI_DB" \
+            "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null)
+    fi
+    # Фалбек на xpro.conf
+    [ -z "$path" ] && path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
+    # Нормализуем: убираем ведущий и завершающий /
+    path="${path#/}"
+    path="${path%/}"
+    echo "${path}"
 }
 
 xuiSetPort() {
@@ -153,15 +168,22 @@ _xuiBaseUrl() {
 _XUI_COOKIE_FILE="/tmp/xpro_xui_session"
 
 xuiApiLogin() {
-    local user pass base_url
+    local user pass base_url web_path login_url
     user=$(xuiGetUser)
     pass=$(xuiGetPass)
     base_url=$(_xuiBaseUrl)
+    web_path=$(xuiGetWebBasePath)
 
-    # Логинимся и сохраняем cookie
+    # Путь логина зависит от WebBasePath
+    if [ -n "$web_path" ]; then
+        login_url="${base_url}/${web_path}/login"
+    else
+        login_url="${base_url}/login"
+    fi
+
     local response
     response=$(curl -s -c "$_XUI_COOKIE_FILE" \
-        -X POST "${base_url}/login" \
+        -X POST "${login_url}" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "username=${user}&password=${pass}" \
         --connect-timeout 10 2>/dev/null)
@@ -170,7 +192,7 @@ xuiApiLogin() {
         return 0
     else
         echo "${red}Ошибка авторизации в 3x-ui API${reset}"
-        echo "${yellow}Проверь credentials: user=${user}${reset}"
+        echo "${yellow}Проверь credentials: user=${user}, path=/${web_path}/${reset}"
         return 1
     fi
 }
@@ -180,14 +202,23 @@ _xuiApiCall() {
     local method="$1"
     local endpoint="$2"
     local data="${3:-}"
-    local base_url
+    local base_url web_path
     base_url=$(_xuiBaseUrl)
+    web_path=$(xuiGetWebBasePath)
 
     # Если cookie нет — логинимся
     [ ! -f "$_XUI_COOKIE_FILE" ] && xuiApiLogin
 
+    # Строим полный URL с учётом WebBasePath
+    local full_url
+    if [ -n "$web_path" ]; then
+        full_url="${base_url}/${web_path}${endpoint}"
+    else
+        full_url="${base_url}${endpoint}"
+    fi
+
     local args=(-s -b "$_XUI_COOKIE_FILE" --connect-timeout 10)
-    args+=(-X "$method" "${base_url}${endpoint}")
+    args+=(-X "$method" "$full_url")
 
     if [ -n "$data" ]; then
         args+=(-H "Content-Type: application/json" -d "$data")
@@ -305,12 +336,19 @@ xuiApiRestart() {
 manage3xuiMenu() {
     while true; do
         clear
-        local port user status
+        local port user status web_path panel_url
         port=$(xuiGetPort)
         user=$(xuiGetUser)
         status=$(getServiceStatus x-ui)
+        web_path=$(xuiGetWebBasePath)
         local domain
         domain=$(xpro_conf_get "DOMAIN")
+
+        if [ -n "$web_path" ]; then
+            panel_url="https://${domain}/${web_path}/"
+        else
+            panel_url="https://${domain}/  ${yellow}(путь не определён)${reset}"
+        fi
 
         echo ""
         echo "${cyan}══════════════════════════════════════${reset}"
@@ -318,7 +356,7 @@ manage3xuiMenu() {
         echo "${cyan}══════════════════════════════════════${reset}"
         echo ""
         echo "  Статус:   $status"
-        echo "  Панель:   https://${domain}/xui/"
+        echo "  Панель:   $panel_url"
         echo "  Порт:     $port"
         echo "  Логин:    $user"
         echo ""

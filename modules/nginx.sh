@@ -87,6 +87,18 @@ writeNginxConfig() {
     local fake_host
     fake_host=$(echo "$fake_url" | sed 's|https://||;s|http://||;s|/.*||')
 
+    # WebBasePath — читаем из БД через xui.sh функцию (уже загружена)
+    local web_path
+    web_path=$(xuiGetWebBasePath 2>/dev/null || true)
+    # Если пусто — генерируем рандомный и сохраняем
+    if [ -z "$web_path" ]; then
+        web_path=$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 12)
+        xpro_conf_set "XUI_WEB_BASE_PATH" "$web_path"
+        echo "${yellow}WebBasePath не найден в БД, сгенерирован: /${web_path}/${reset}"
+    else
+        xpro_conf_set "XUI_WEB_BASE_PATH" "$web_path"
+    fi
+
     # nginx.conf главный
     cat > /etc/nginx/nginx.conf << 'NGINXMAIN'
 user www-data;
@@ -158,8 +170,8 @@ server {
     proxy_buffering off;
     proxy_cache     off;
 
-    # Панель 3x-ui
-    location /xui/ {
+    # Панель 3x-ui — путь из WebBasePath (скрытый от сканеров)
+    location /${web_path}/ {
         proxy_pass http://127.0.0.1:${xui_port}/;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -417,9 +429,10 @@ checkCertExpiry() {
 setupRealIpRestore() {
     echo "${cyan}Обновляем Cloudflare IP диапазоны...${reset}"
 
-    local tmp
+    local tmp=""
     tmp=$(mktemp) || return 1
-    trap 'rm -f "$tmp"' RETURN
+    # Защищаем от unbound variable при set -u: tmp гарантированно строка
+    trap 'rm -f "${tmp:-}"' RETURN
 
     printf '# Cloudflare Real IP Restore — auto-generated\n' > "$tmp"
 
@@ -480,7 +493,7 @@ toggleCfGuard() {
         read -r confirm
         [[ "$confirm" != "y" ]] && return 0
 
-        local tmp
+        local tmp=""
         tmp=$(mktemp) || return 1
 
         printf '# CF Guard — allow only Cloudflare IPs\ngeo $realip_remote_addr $cloudflare_ip {\n    default 0;\n' > "$tmp"
