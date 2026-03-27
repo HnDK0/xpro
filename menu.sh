@@ -15,7 +15,7 @@ XPRO_CONF="/usr/local/etc/xpro/xpro.conf"
 # ЗАГРУЗКА МОДУЛЕЙ
 # =================================================================
 _load_modules() {
-    for mod in core xui nginx warp tor psiphon security; do
+    for mod in core xui nginx warp tor psiphon security logs; do
         local f="${XPRO_LIB}/${mod}.sh"
         if [ -f "$f" ]; then
             # shellcheck source=/dev/null
@@ -125,6 +125,7 @@ main_menu() {
         echo "  ${green}4.${reset} Nginx / SSL"
         echo "  ${green}5.${reset} Безопасность"
         echo "  ${green}6.${reset} 3x-ui"
+        echo "  ${green}7.${reset} Логи"
         echo "  ${green}0.${reset} Выход"
         echo ""
         read -rp "  Выбор: " choice
@@ -136,6 +137,7 @@ main_menu() {
             4) nginxMenu ;;
             5) securityMenu ;;
             6) manage3xuiMenu ;;
+            7) logsMenu ;;
             0)
                 echo ""
                 echo "  Для возврата: xpro"

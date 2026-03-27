@@ -137,7 +137,7 @@ load_modules() {
     # Локальный запуск: задай XPRO_LOCAL_DIR=/path/to/repo перед вызовом скрипта.
     # BASH_SOURCE[0] при bash <(curl ...) указывает на /dev/fd/N — ненадёжно.
     if [[ -n "${XPRO_LOCAL_DIR:-}" && -d "${XPRO_LOCAL_DIR}/modules" ]]; then
-        for mod in core xui nginx warp tor psiphon security; do
+        for mod in core xui nginx warp tor psiphon security logs; do
             cp "${XPRO_LOCAL_DIR}/modules/${mod}.sh" "${XPRO_LIB}/${mod}.sh" || \
                 _fail "Не удалось скопировать ${mod}.sh"
         done
@@ -145,11 +145,11 @@ load_modules() {
             cp "${XPRO_LOCAL_DIR}/menu.sh" "${XPRO_LIB}/menu.sh"
         _ok "Модули загружены из локальной копии (${XPRO_LOCAL_DIR})"
     else
-        # Скачиваем с GitHub
-        for mod in core xui nginx warp tor psiphon security; do
-            curl -fsSL "${MODULES_URL}/${mod}.sh" -o "${XPRO_LIB}/${mod}.sh" || \
-                _fail "Не удалось загрузить ${mod}.sh"
-        done
+    # Скачиваем с GitHub
+    for mod in core xui nginx warp tor psiphon security logs; do
+        curl -fsSL "${MODULES_URL}/${mod}.sh" -o "${XPRO_LIB}/${mod}.sh" || \
+            _fail "Не удалось загрузить ${mod}.sh"
+    done
         curl -fsSL "${MENU_URL}" -o "${XPRO_LIB}/menu.sh" || \
             _fail "Не удалось загрузить menu.sh"
         _ok "Модули загружены с GitHub"
@@ -158,7 +158,7 @@ load_modules() {
     chmod +x "${XPRO_LIB}"/*.sh
 
     # Подключаем все модули
-    for mod in core xui nginx warp tor psiphon security; do
+    for mod in core xui nginx warp tor psiphon security logs; do
         # shellcheck source=/dev/null
         source "${XPRO_LIB}/${mod}.sh"
     done
@@ -511,7 +511,18 @@ main() {
     fi
 
     # =============================================================
-    # ШАГ 12 — Fail2Ban
+    # ШАГ 12 — Logrotate
+    # =============================================================
+    _step "Настройка logrotate"
+    if [ -f /etc/logrotate.d/xpro ]; then
+        _ok "Logrotate уже настроен — пропускаем"
+    else
+        setupLogrotate
+        _ok "Logrotate настроен"
+    fi
+
+    # =============================================================
+    # ШАГ 13 — Fail2Ban
     # =============================================================
     _step "Настройка Fail2Ban"
     if _fail2ban_is_done; then
@@ -522,7 +533,7 @@ main() {
     fi
 
     # =============================================================
-    # ШАГ 13 — UFW
+    # ШАГ 14 — UFW
     # =============================================================
     if [[ "$ARG_UFW" == "on" ]]; then
         _step "Настройка UFW"
@@ -535,7 +546,7 @@ main() {
     fi
 
     # =============================================================
-    # ШАГ 14 — Команда xpro
+    # ШАГ 15 — Команда xpro
     # menu.sh уже скачан в XPRO_LIB при load_modules — просто копируем
     # =============================================================
     _step "Установка команды xpro"
