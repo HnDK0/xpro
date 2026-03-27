@@ -63,7 +63,143 @@ getTorBridgeType() {
 }
 
 # =================================================================
-# УСТАНОВКА
+# ЗЕРКАЛА РЕПОЗИТОРИЯ TOR
+#
+# Приоритет:
+#   1. deb.torproject.org    — официальный (заблокирован в РФ и ряде других стран)
+#   2. tor.eff.org           — зеркало EFF, идентично официальному, тот же GPG ключ
+#   3. mirror.torproject.org — официальное зеркало Tor Project
+#
+# GPG ключ один для всех зеркал — пакеты подписаны Tor Project,
+# зеркало только раздаёт файлы.
+# =================================================================
+_TOR_MIRRORS=(
+    "deb.torproject.org/torproject.org"
+    "tor.eff.org/torproject.org"
+    "mirror.torproject.org/debian"
+)
+
+# Fingerprint GPG ключа Tor Project
+_TOR_GPG_FP="A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89"
+
+# =================================================================
+# ПОИСК ДОСТУПНОГО ЗЕРКАЛА
+# Перебирает зеркала с таймаутом 5 сек на каждое.
+# Выводит hostname первого доступного зеркала (без https://).
+# =================================================================
+_findTorMirror() {
+    local mirror
+    for mirror in "${_TOR_MIRRORS[@]}"; do
+        printf "  Проверяем https://%s ... " "$mirror"
+        local code
+        code=$(curl -fsSL \
+            --connect-timeout 5 \
+            --max-time 5 \
+            -o /dev/null \
+            -w "%{http_code}" \
+            "https://${mirror}" 2>/dev/null)
+        if [[ "$code" =~ ^[23] ]]; then
+            echo "${green}OK${reset}"
+            echo "$mirror"
+            return 0
+        else
+            echo "${yellow}недоступен (${code:-timeout})${reset}"
+        fi
+    done
+    return 1
+}
+
+# =================================================================
+# ЗАГРУЗКА GPG КЛЮЧА TOR PROJECT
+# Пробует скачать с найденного зеркала, затем остальные,
+# затем keyserver как последний резерв.
+# =================================================================
+_fetchTorGpgKey() {
+    local primary_mirror="$1"
+    local keyring="/usr/share/keyrings/tor-archive-keyring.gpg"
+    local mirror
+
+    for mirror in "$primary_mirror" "${_TOR_MIRRORS[@]}"; do
+        local asc_url="https://${mirror}/${_TOR_GPG_FP}.asc"
+        if curl -fsSL \
+                --connect-timeout 8 \
+                --max-time 15 \
+                "$asc_url" \
+                | gpg --dearmor -o "$keyring" 2>/dev/null; then
+            return 0
+        fi
+    done
+
+    # Последний резерв — keyserver
+    echo "${yellow}Пробуем получить ключ с keyserver.ubuntu.com...${reset}"
+    if gpg --keyserver keyserver.ubuntu.com \
+           --recv-keys "$_TOR_GPG_FP" 2>/dev/null && \
+       gpg --export "$_TOR_GPG_FP" | gpg --dearmor -o "$keyring" 2>/dev/null; then
+        return 0
+    fi
+
+    echo "${red}Не удалось получить GPG ключ Tor Project${reset}"
+    return 1
+}
+
+# =================================================================
+# УСТАНОВКА ИЗ КОНКРЕТНОГО ЗЕРКАЛА (apt-репо)
+# mirror — hostname без https://, например: tor.eff.org/torproject.org
+# =================================================================
+_installTorFromMirror() {
+    local mirror="$1"
+    local codename="$2"
+
+    echo "${cyan}Используем зеркало: https://${mirror}${reset}"
+    installPackage "apt-transport-https gpg" || true
+
+    _fetchTorGpgKey "$mirror" || return 1
+
+    cat > /etc/apt/sources.list.d/tor.list << EOF
+deb [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] https://${mirror} ${codename} main
+deb-src [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] https://${mirror} ${codename} main
+EOF
+
+    # Обновляем только добавленный репо — экономим время
+    apt-get update \
+        -o Dir::Etc::sourcelist="sources.list.d/tor.list" \
+        -o Dir::Etc::sourceparts="-" \
+        -o APT::Get::List-Cleanup="0" &>/dev/null || \
+        ${PACKAGE_MANAGEMENT_UPDATE} &>/dev/null || true
+
+    if installPackage "tor deb.torproject.org-keyring"; then
+        xpro_conf_set "TOR_MIRROR" "$mirror"
+        return 0
+    fi
+
+    # Не вышло — чистим за собой чтобы не сломать apt
+    echo "${yellow}Установка из этого зеркала не удалась, откатываем sources.list...${reset}"
+    rm -f /etc/apt/sources.list.d/tor.list \
+          /usr/share/keyrings/tor-archive-keyring.gpg
+    return 1
+}
+
+# =================================================================
+# УСТАНОВКА ИЗ СИСТЕМНОГО РЕПО (финальный fallback)
+# Версия может быть старее официальной.
+# =================================================================
+_installTorFromSystemRepo() {
+    echo "${cyan}Устанавливаем Tor из системного репозитория...${reset}"
+    echo "${yellow}Версия может быть старее официальной.${reset}"
+    installPackage "tor" || {
+        echo "${red}Не удалось установить Tor${reset}"
+        return 1
+    }
+}
+
+# =================================================================
+# УСТАНОВКА TOR — ГЛАВНАЯ ФУНКЦИЯ
+#
+# Логика выбора источника:
+#   1. Перебираем зеркала (официальный + EFF + mirror), 5 сек на каждое
+#   2. Нашли зеркало → устанавливаем из него (актуальная версия)
+#   3. Зеркало нашли, установка упала → следующее зеркало
+#   4. Все зеркала недоступны → системный репо
 # =================================================================
 installTor() {
     if command -v tor &>/dev/null; then
@@ -80,35 +216,33 @@ installTor() {
             (. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}"))
 
         if [ -n "$codename" ]; then
-            echo "${cyan}Добавляем официальный репозиторий torproject.org...${reset}"
-            installPackage "apt-transport-https gpg" || true
+            echo "${cyan}Поиск доступного репозитория Tor...${reset}"
 
-            curl -fsSL \
-                https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc \
-                | gpg --dearmor \
-                -o /usr/share/keyrings/tor-archive-keyring.gpg 2>/dev/null || true
+            local mirror installed=0
+            if mirror=$(_findTorMirror); then
+                # Пробуем найденное зеркало, затем остальные по порядку
+                local m
+                for m in "$mirror" "${_TOR_MIRRORS[@]}"; do
+                    [ "$m" = "$mirror" ] && { _installTorFromMirror "$m" "$codename" && installed=1 && break || continue; }
+                    echo "${yellow}Пробуем следующее зеркало: ${m}${reset}"
+                    _installTorFromMirror "$m" "$codename" && installed=1 && break
+                done
+            fi
 
-            echo "deb [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] \
-https://deb.torproject.org/torproject.org ${codename} main" \
-                > /etc/apt/sources.list.d/tor.list
-            echo "deb-src [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] \
-https://deb.torproject.org/torproject.org ${codename} main" \
-                >> /etc/apt/sources.list.d/tor.list
-
-            ${PACKAGE_MANAGEMENT_UPDATE} &>/dev/null || true
-
-            installPackage "tor deb.torproject.org-keyring" || {
-                echo "${yellow}Официальный репо недоступен, ставим из системного...${reset}"
-                installPackage "tor" || {
-                    echo "${red}Не удалось установить Tor${reset}"
-                    return 1
-                }
-            }
+            if [ "$installed" -eq 0 ]; then
+                echo "${yellow}Все зеркала исчерпаны, используем системный репо${reset}"
+                _installTorFromSystemRepo || return 1
+            fi
         else
-            installPackage "tor" || { echo "${red}Не удалось установить Tor${reset}"; return 1; }
+            _installTorFromSystemRepo || return 1
         fi
+
     else
-        installPackage "tor" || { echo "${red}Не удалось установить Tor${reset}"; return 1; }
+        # dnf/yum — системный репо (EPEL для CentOS)
+        installPackage "tor" || {
+            echo "${red}Не удалось установить Tor${reset}"
+            return 1
+        }
     fi
 
     # GeoIP для ExitNodes по странам
@@ -118,7 +252,9 @@ https://deb.torproject.org/torproject.org ${codename} main" \
     # Обфускация мостов
     installPackage "obfs4proxy" 2>/dev/null || true
 
-    echo "${green}Tor установлен$(tor --version 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1 | xargs -I{} echo " v{}")${reset}"
+    local ver
+    ver=$(tor --version 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
+    echo "${green}Tor установлен${ver:+ v${ver}}${reset}"
 }
 
 upgradeTor() {
@@ -126,8 +262,31 @@ upgradeTor() {
     [ -z "${PACKAGE_MANAGEMENT_INSTALL:-}" ] && identifyOS
 
     if command -v apt &>/dev/null; then
+        # Если репо уже добавлен — пробуем обновить его индекс через сохранённое зеркало
+        if [ -f /etc/apt/sources.list.d/tor.list ]; then
+            local saved_mirror reachable=0
+            saved_mirror=$(xpro_conf_get "TOR_MIRROR" 2>/dev/null || true)
+
+            if [ -n "$saved_mirror" ]; then
+                local code
+                code=$(curl -fsSL --connect-timeout 5 --max-time 5 \
+                    -o /dev/null -w "%{http_code}" \
+                    "https://${saved_mirror}" 2>/dev/null)
+                [[ "$code" =~ ^[23] ]] && reachable=1
+            fi
+
+            if [ "$reachable" -eq 1 ]; then
+                apt-get update \
+                    -o Dir::Etc::sourcelist="sources.list.d/tor.list" \
+                    -o Dir::Etc::sourceparts="-" \
+                    -o APT::Get::List-Cleanup="0" &>/dev/null || true
+            else
+                echo "${yellow}Зеркало ${saved_mirror:-tor repo} недоступно, обновляем из кэша${reset}"
+            fi
+        fi
+
         apt-get install -y --only-upgrade tor tor-geoipdb 2>/dev/null || \
-        apt-get install -y tor tor-geoipdb 2>/dev/null || true
+            apt-get install -y tor tor-geoipdb 2>/dev/null || true
     else
         ${PACKAGE_MANAGEMENT_INSTALL} tor || true
     fi
