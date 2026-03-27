@@ -80,15 +80,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) 
 ### Полная установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) \
-  -domain example.com \
-  -cdn on \
-  -warp on \
-  -tor off \
-  -psiphon off \
-  -ufw on \
-  -bbr on \
-  -fake on
+bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn of -warp off -tor off -psiphon off -ufw on -bbr on -fake on
 ```
 
 ### После установки
