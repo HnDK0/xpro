@@ -341,6 +341,68 @@ xuiApiRestart() {
 }
 
 # =================================================================
+# ПОДПИСКИ — чтение и запись через БД напрямую
+# Таблица settings: key/value пары конфигурации панели
+# =================================================================
+
+# Читает одно значение из settings по ключу
+_xuiDbSettingGet() {
+    local key="$1"
+    sqlite3 "$XUI_DB" \
+        "SELECT value FROM settings WHERE key='${key}' LIMIT 1;" 2>/dev/null
+}
+
+# Пишет значение в settings (UPDATE если есть, INSERT если нет)
+_xuiDbSettingSet() {
+    local key="$1" val="$2"
+    sqlite3 "$XUI_DB" \
+        "INSERT INTO settings(key,value) VALUES('${key}','${val}')
+         ON CONFLICT(key) DO UPDATE SET value='${val}';" 2>/dev/null
+}
+
+xuiGetSubSettings() {
+    [ -f "$XUI_DB" ] || { echo "${red}БД не найдена${reset}"; return 1; }
+    local port path json_path enabled
+    port=$(_xuiDbSettingGet "subPort")
+    path=$(_xuiDbSettingGet "subPath")
+    json_path=$(_xuiDbSettingGet "subJsonPath")
+    enabled=$(_xuiDbSettingGet "subEnable")
+    echo "  subEnable:   ${enabled:-0}"
+    echo "  subPort:     ${port:-2096}"
+    echo "  subPath:     ${path:-/sub/}"
+    echo "  subJsonPath: ${json_path:-/sub/json/}"
+}
+
+# Устанавливает рандомный путь подписки (при первичной установке)
+# или произвольный переданный путь
+xuiSetSubPath() {
+    local new_path="${1:-}"
+    [ -f "$XUI_DB" ] || { echo "${red}БД не найдена${reset}"; return 1; }
+
+    # Генерируем рандомный путь если не передан
+    if [ -z "$new_path" ]; then
+        new_path=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 20)
+    fi
+    # Убираем слеши — будем добавлять сами
+    new_path="${new_path#/}"; new_path="${new_path%/}"
+
+    # x-ui должен быть остановлен при прямой записи в БД
+    local was_running=0
+    systemctl is-active --quiet x-ui && was_running=1
+    [ "$was_running" -eq 1 ] && systemctl stop x-ui
+
+    _xuiDbSettingSet "subPath"     "/${new_path}/"
+    _xuiDbSettingSet "subJsonPath" "/${new_path}/json/"
+    _xuiDbSettingSet "subEnable"   "1"
+
+    [ "$was_running" -eq 1 ] && systemctl start x-ui
+
+    # Сохраняем путь в xpro.conf для быстрого чтения без БД
+    xpro_conf_set "XUI_SUB_PATH" "/${new_path}/"
+    echo "${green}Путь подписки установлен: /${new_path}/${reset}"
+}
+
+# =================================================================
 # ПРОСМОТР INBOUND'ОВ (WS / gRPC) — из БД напрямую
 # =================================================================
 xuiShowInbounds() {
@@ -384,6 +446,22 @@ xuiShowInbounds() {
          WHERE protocol IN ('vless','vmess','trojan')
          AND stream_settings LIKE '%\"network\":\"grpc\"%';")
     [ "$grpc_found" -eq 0 ] && echo "    нет"
+
+    echo ""
+    echo "${cyan}  Подписка:${reset}"
+    local sub_enabled sub_port sub_path sub_json_path domain
+    sub_enabled=$(_xuiDbSettingGet "subEnable")
+    sub_port=$(_xuiDbSettingGet "subPort")
+    sub_path=$(_xuiDbSettingGet "subPath")
+    sub_json_path=$(_xuiDbSettingGet "subJsonPath")
+    domain=$(xpro_conf_get "DOMAIN" 2>/dev/null || echo "?")
+    if [ "${sub_enabled:-0}" = "1" ]; then
+        printf "    ${green}%-20s${reset}  порт: %-6s  path: %s\n" \
+            "subscription" "${sub_port:-2096}" "${sub_path:-/sub/}"
+        printf "    URL: ${cyan}https://%s%s${reset}\n" "$domain" "${sub_path:-/sub/}"
+    else
+        echo "    ${yellow}отключена${reset}"
+    fi
     echo ""
 }
 

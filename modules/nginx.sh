@@ -593,7 +593,7 @@ syncXrayInbounds() {
     tmp_blocks=$(mktemp)
     trap 'rm -f "$tmp_blocks"' RETURN
 
-    local ws_count=0 grpc_count=0
+    local ws_count=0 grpc_count=0 sub_count=0
 
     # ── WebSocket inbound'ы ──────────────────────────────────────
     while IFS='|' read -r port settings; do
@@ -649,6 +649,56 @@ EOF
          WHERE protocol IN ('vless','vmess','trojan')
          AND stream_settings LIKE '%\"network\":\"grpc\"%';")
 
+    # ── Подписка ─────────────────────────────────────────────────
+    local sub_enabled sub_port sub_path sub_json_path
+    sub_enabled=$(sqlite3 "$xui_db" \
+        "SELECT value FROM settings WHERE key='subEnable' LIMIT 1;" 2>/dev/null)
+    sub_port=$(sqlite3 "$xui_db" \
+        "SELECT value FROM settings WHERE key='subPort' LIMIT 1;" 2>/dev/null)
+    sub_path=$(sqlite3 "$xui_db" \
+        "SELECT value FROM settings WHERE key='subPath' LIMIT 1;" 2>/dev/null)
+    sub_json_path=$(sqlite3 "$xui_db" \
+        "SELECT value FROM settings WHERE key='subJsonPath' LIMIT 1;" 2>/dev/null)
+
+    # Нормализуем значения
+    sub_port="${sub_port:-2096}"
+    sub_path="${sub_path:-/sub/}"
+    sub_json_path="${sub_json_path:-/sub/json/}"
+
+    if [ "${sub_enabled:-0}" = "1" ]; then
+        cat >> "$tmp_blocks" << EOF
+    # xpro-sync: sub ${sub_port} ${sub_path}
+    location ${sub_path} {
+        proxy_pass          http://127.0.0.1:${sub_port};
+        proxy_http_version  1.1;
+        proxy_set_header    Host             \$host;
+        proxy_set_header    X-Real-IP        \$remote_addr;
+        proxy_set_header    X-Forwarded-For  \$proxy_add_x_forwarded_for;
+        proxy_read_timeout  60s;
+        access_log          off;
+        error_log           /dev/null crit;
+    }
+    # xpro-sync-end
+
+    # xpro-sync: sub-json ${sub_port} ${sub_json_path}
+    location ${sub_json_path} {
+        proxy_pass          http://127.0.0.1:${sub_port};
+        proxy_http_version  1.1;
+        proxy_set_header    Host             \$host;
+        proxy_set_header    X-Real-IP        \$remote_addr;
+        proxy_set_header    X-Forwarded-For  \$proxy_add_x_forwarded_for;
+        proxy_read_timeout  60s;
+        access_log          off;
+        error_log           /dev/null crit;
+    }
+    # xpro-sync-end
+
+EOF
+        sub_count=1
+        # Обновляем xpro.conf актуальным путём из БД
+        xpro_conf_set "XUI_SUB_PATH" "$sub_path"
+    fi
+
     # ── Инжектируем блоки в xpro.conf через Python ───────────────
     python3 - "$NGINX_XPRO_CONF" "$tmp_blocks" << 'PYEOF'
 import sys, re
@@ -675,15 +725,16 @@ with open(conf_path, 'w') as f:
 PYEOF
 
     _nginx_reload
-    echo "${green}Синхронизировано: ${ws_count} WS, ${grpc_count} gRPC инбаундов${reset}"
+    echo "${green}Синхронизировано: ${ws_count} WS, ${grpc_count} gRPC, ${sub_count} подписка${reset}"
 }
 
 _syncXrayInboundsStatus() {
     [ -f "$NGINX_XPRO_CONF" ] || { echo "—"; return; }
-    local ws grpc
-    ws=$(grep -c '# xpro-sync: ws'   "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    grpc=$(grep -c '# xpro-sync: grpc' "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    echo "${ws} WS, ${grpc} gRPC"
+    local ws grpc sub
+    ws=$(grep -c '# xpro-sync: ws'       "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    grpc=$(grep -c '# xpro-sync: grpc'   "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    sub=$(grep -c '# xpro-sync: sub '    "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    echo "${ws} WS, ${grpc} gRPC, ${sub} sub"
 }
 
 setupSyncCron() {

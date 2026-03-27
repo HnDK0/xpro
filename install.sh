@@ -322,8 +322,9 @@ main() {
     rm -f /etc/apt/sources.list.d/cloudflare-client.list
     rm -f /etc/apt/sources.list.d/cloudflare-warp.list
     ${PACKAGE_MANAGEMENT_UPDATE} -qq 2>/dev/null || true
-    installPackage "gnupg2" || true
+    installPackage "gnupg2"  || true
     installPackage "sqlite3" || true
+    installPackage "jq"      || true
     _ok "Базовые пакеты"
 
     _step "Настройка Swap"
@@ -360,6 +361,24 @@ main() {
     else
         install3xui "$ARG_PANEL" "$XUI_USER" "$XUI_PASS" "$XUI_PORT" "$XUI_PATH" || _fail "Не удалось установить 3x-ui"
         _ok "3x-ui установлен"
+    fi
+
+    # =============================================================
+    # ШАГ 1б — Путь подписки (рандомный, пишем в БД напрямую)
+    # =============================================================
+    _step "Настройка пути подписки"
+    if [ -n "$(xpro_conf_get XUI_SUB_PATH 2>/dev/null)" ]; then
+        _ok "Путь подписки уже задан: $(xpro_conf_get XUI_SUB_PATH) — пропускаем"
+    else
+        # Ждём пока x-ui полностью инициализирует БД
+        local sub_attempts=0
+        while [ "$sub_attempts" -lt 10 ]; do
+            [ -f "$XUI_DB" ] && [ -s "$XUI_DB" ] && break
+            sleep 1
+            sub_attempts=$((sub_attempts + 1))
+        done
+        xuiSetSubPath || _yellow "warn: Не удалось задать путь подписки — используется /sub/"
+        _ok "Путь подписки: $(xpro_conf_get XUI_SUB_PATH)"
     fi
 
     # =============================================================
@@ -528,6 +547,17 @@ main() {
     fi
 
     # =============================================================
+    # ШАГ 12б — Cron авто-синхронизации WS/gRPC/sub inbound'ов
+    # =============================================================
+    _step "Настройка авто-синхронизации inbound'ов"
+    if [ -f /etc/cron.d/xpro-sync-inbounds ]; then
+        _ok "Cron синхронизации уже настроен — пропускаем"
+    else
+        setupSyncCron
+        _ok "Cron синхронизации настроен (каждые 5 минут)"
+    fi
+
+    # =============================================================
     # ШАГ 13 — Fail2Ban
     # =============================================================
     _step "Настройка Fail2Ban"
@@ -569,12 +599,13 @@ main() {
 # которые могут вернуть ненулевой код и уронить скрипт
 # =================================================================
 print_summary() {
-    local domain xui_user xui_pass xui_port xui_path server_ip ssl_info panel_url
+    local domain xui_user xui_pass xui_port xui_path xui_sub_path server_ip ssl_info panel_url sub_url
     domain=$(xpro_conf_get "DOMAIN"          2>/dev/null || echo "$ARG_DOMAIN")
     xui_user=$(xpro_conf_get "XUI_USER"      2>/dev/null || echo "?")
     xui_pass=$(xpro_conf_get "XUI_PASS"      2>/dev/null || echo "?")
     xui_port=$(xpro_conf_get "XUI_PORT"      2>/dev/null || echo "$ARG_PORT")
     xui_path=$(xpro_conf_get "XUI_WEB_BASE_PATH" 2>/dev/null || echo "")
+    xui_sub_path=$(xpro_conf_get "XUI_SUB_PATH"  2>/dev/null || echo "/sub/")
     server_ip=$(getServerIP 2>/dev/null || echo "?")
     ssl_info=$(checkCertExpiry 2>/dev/null || echo "?")
 
@@ -587,15 +618,18 @@ print_summary() {
         panel_url="${domain}"
     fi
 
+    sub_url="https://${domain}${xui_sub_path}"
+
     echo ""
     echo "${cyan}================================================================${reset}"
     printf "   ${green}X-UI PRO — Установка завершена${reset}\n"
     echo "${cyan}================================================================${reset}"
-    printf "  Панель:  https://%s\n" "${panel_url}"
-    printf "  IP:      %s\n" "$server_ip"
-    printf "  Логин:   %s\n" "$xui_user"
-    printf "  Пароль:  %s\n" "$xui_pass"
-    printf "  SSL:     %s\n" "$ssl_info"
+    printf "  Панель:    https://%s\n" "${panel_url}"
+    printf "  Подписка:  %s\n"         "${sub_url}"
+    printf "  IP:        %s\n"         "$server_ip"
+    printf "  Логин:     %s\n"         "$xui_user"
+    printf "  Пароль:    %s\n"         "$xui_pass"
+    printf "  SSL:       %s\n"         "$ssl_info"
     echo "${cyan}================================================================${reset}"
 
     [[ "$(xpro_conf_get WARP_INSTALLED 2>/dev/null)" == "yes" ]] && \
