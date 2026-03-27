@@ -2,7 +2,7 @@
 # =================================================================
 # install.sh — X-UI PRO установщик
 # Использование:
-#   bash install.sh [аргументы]
+#   bash <(curl -Ls https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) [аргументы]
 #
 # Аргументы:
 #   -panel    mhsanaei|alireza     (default: mhsanaei)
@@ -26,7 +26,10 @@ XPRO_LIB="/usr/local/lib/xpro"
 XPRO_BIN="/usr/local/bin/xpro"
 XPRO_CONF_DIR="/usr/local/etc/xpro"
 XPRO_CONF="${XPRO_CONF_DIR}/xpro.conf"
-MODULES_URL="https://raw.githubusercontent.com/YOUR_USER/x-ui-pro/master/modules"
+
+REPO_RAW="https://raw.githubusercontent.com/HnDK0/xpro/main"
+MODULES_URL="${REPO_RAW}/modules"
+MENU_URL="${REPO_RAW}/menu.sh"
 
 # =================================================================
 # ДЕФОЛТНЫЕ АРГУМЕНТЫ
@@ -66,7 +69,7 @@ parse_args() {
 
 print_usage() {
     cat << 'EOF'
-Использование: bash install.sh [аргументы]
+Использование: bash <(curl -Ls https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) [аргументы]
 
   -panel    mhsanaei|alireza     панель (default: mhsanaei)
   -port     2053-65535           порт панели (default: random)
@@ -80,14 +83,13 @@ print_usage() {
   -fake     yes|no               фейковый сайт (default: yes)
 
 Примеры:
-  bash install.sh -domain example.com -cdn on -warp yes -tor yes
-  bash install.sh -domain example.com -warp yes -ufw on
+  bash <(curl -Ls https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn on -warp yes -tor yes
+  bash <(curl -Ls https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -warp yes -ufw on
 EOF
 }
 
 # =================================================================
 # МИНИМАЛЬНЫЕ УТИЛИТЫ ДО ЗАГРУЗКИ core.sh
-# (цвета, базовый вывод)
 # =================================================================
 _red()    { echo -e "\033[1;31m$*\033[0m"; }
 _green()  { echo -e "\033[1;32m$*\033[0m"; }
@@ -102,16 +104,10 @@ _fail() { _red   "    [FAIL] $*"; exit 1; }
 # ПРОВЕРКИ ПЕРЕД УСТАНОВКОЙ
 # =================================================================
 pre_checks() {
-    # Root
     [[ "$EUID" -ne 0 ]] && _fail "Запусти от root: sudo bash install.sh"
-
-    # Linux
     [[ "$(uname)" != "Linux" ]] && _fail "Только Linux"
-
-    # Домен обязателен
     [[ -z "$ARG_DOMAIN" ]] && _fail "Укажи домен: -domain example.com"
 
-    # Валидация порта
     if [[ -n "$ARG_PORT" ]]; then
         if ! [[ "$ARG_PORT" =~ ^[0-9]+$ ]] || \
            [ "$ARG_PORT" -lt 1024 ] || [ "$ARG_PORT" -gt 65535 ]; then
@@ -119,14 +115,12 @@ pre_checks() {
         fi
     fi
 
-    # Psiphon требует архитектуру x86_64 или arm64
     if [[ "$ARG_PSIPHON" == "yes" ]]; then
         local arch; arch=$(uname -m)
         [[ "$arch" =~ ^(x86_64|aarch64|armv7l)$ ]] || \
             _fail "Psiphon не поддерживает архитектуру: $arch"
     fi
 
-    # WARP+Psiphon — предупреждение
     if [[ "$ARG_WARP" == "yes" && "$ARG_PSIPHON" == "yes" ]]; then
         _yellow "Внимание: WARP и Psiphon установлены оба."
         _yellow "В меню можно включить режим WARP+Psiphon."
@@ -146,10 +140,12 @@ load_modules() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
     if [[ -d "${script_dir}/modules" ]]; then
-        # Локальный запуск
         for mod in core xui nginx warp tor psiphon security; do
             cp "${script_dir}/modules/${mod}.sh" "${XPRO_LIB}/${mod}.sh"
         done
+        # Копируем menu.sh
+        [[ -f "${script_dir}/menu.sh" ]] && \
+            cp "${script_dir}/menu.sh" "${XPRO_LIB}/menu.sh"
         _ok "Модули загружены из локальной копии"
     else
         # Скачиваем с GitHub
@@ -157,6 +153,9 @@ load_modules() {
             curl -fsSL "${MODULES_URL}/${mod}.sh" -o "${XPRO_LIB}/${mod}.sh" || \
                 _fail "Не удалось загрузить ${mod}.sh"
         done
+        # Скачиваем menu.sh
+        curl -fsSL "${MENU_URL}" -o "${XPRO_LIB}/menu.sh" || \
+            _fail "Не удалось загрузить menu.sh"
         _ok "Модули загружены с GitHub"
     fi
 
@@ -174,7 +173,6 @@ gen_random_port() {
     local port
     while true; do
         port=$(shuf -i 10000-65000 -n 1)
-        # Проверяем что порт свободен
         if ! ss -tlnp 2>/dev/null | grep -q ":${port} "; then
             echo "$port"
             return
@@ -188,7 +186,6 @@ gen_random_port() {
 main() {
     parse_args "$@"
 
-    # Баннер
     clear
     cat << 'EOF'
 ╔═══════════════════════════════════════╗
@@ -206,101 +203,78 @@ EOF
     echo "  BBR:      $ARG_BBR"
     echo ""
 
-    # --- Проверки ---
     _step "Проверка требований"
     pre_checks
     _ok "Проверки пройдены"
 
-    # --- Загрузка модулей ---
     load_modules
 
-    # --- Определение OS ---
     _step "Определение системы"
     identifyOS
     _ok "OS определена: ${OS_NAME:-Linux}"
 
-    # --- Swap ---
     _step "Настройка Swap"
     setupSwap
     _ok "Swap настроен"
 
-    # --- Порт панели ---
     if [[ -z "$ARG_PORT" ]]; then
         ARG_PORT=$(gen_random_port)
         _yellow "Случайный порт панели: $ARG_PORT"
     fi
 
-    # --- Сохраняем базовый конфиг (без порта — он будет подтверждён после установки) ---
     xpro_conf_set "DOMAIN"    "$ARG_DOMAIN"
     xpro_conf_set "CDN"       "$ARG_CDN"
     xpro_conf_set "XUI_PANEL" "$ARG_PANEL"
 
-    # =============================================================
     # ШАГ 1 — 3x-ui
-    # =============================================================
     _step "Установка 3x-ui (${ARG_PANEL})"
     install3xui "$ARG_PANEL" "$ARG_PORT"
     _ok "3x-ui установлен"
 
-    # Подтверждаем реальный порт из БД после установки
     local real_port
     real_port=$(xuiGetPort)
     xpro_conf_set "XUI_PORT" "$real_port"
     ARG_PORT="$real_port"
 
-    # Сохраняем credentials после установки
     local xui_user xui_pass
     xui_user=$(xuiGetUser)
     xui_pass=$(xuiGetPass)
     xpro_conf_set "XUI_USER" "$xui_user"
     xpro_conf_set "XUI_PASS" "$xui_pass"
 
-    # =============================================================
     # ШАГ 2 — Nginx
-    # =============================================================
     _step "Установка Nginx"
     installNginx
     _ok "Nginx установлен"
 
-    # =============================================================
     # ШАГ 3 — SSL
-    # =============================================================
     _step "Настройка SSL для ${ARG_DOMAIN}"
     configSSL "$ARG_DOMAIN" "$ARG_CDN"
     _ok "SSL настроен"
 
-    # =============================================================
     # ШАГ 4 — Nginx конфиг
-    # =============================================================
     _step "Настройка Nginx reverse proxy"
     writeNginxConfig "$ARG_DOMAIN" "$ARG_PORT" "$ARG_CDN"
     _ok "Nginx конфиг записан"
 
-    # =============================================================
     # ШАГ 5 — Фейковый сайт
-    # =============================================================
     if [[ "$ARG_FAKE" == "yes" ]]; then
         _step "Установка фейкового сайта"
         setFakeSite "random"
         _ok "Фейковый сайт установлен"
     fi
 
-    # =============================================================
     # ШАГ 6 — Cloudflare Real IP
-    # =============================================================
     _step "Настройка Cloudflare Real IP"
     setupRealIpRestore
     setupCfIpCron
     _ok "CF Real IP настроен"
 
-    # =============================================================
-    # ШАГ 7 — WARP (опционально)
-    # =============================================================
+    # ШАГ 7 — WARP
     if [[ "$ARG_WARP" == "yes" ]]; then
         _step "Установка Cloudflare WARP"
         installWarp
         configWarp
-        # Ждём запуска и добавляем outbound в 3x-ui
         sleep 3
         addWarpOutbound
         xpro_conf_set "WARP_INSTALLED" "yes"
@@ -309,9 +283,7 @@ EOF
         xpro_conf_set "WARP_INSTALLED" "no"
     fi
 
-    # =============================================================
-    # ШАГ 8 — Tor (опционально)
-    # =============================================================
+    # ШАГ 8 — Tor
     if [[ "$ARG_TOR" == "yes" ]]; then
         _step "Установка Tor"
         installTor
@@ -326,9 +298,7 @@ EOF
         xpro_conf_set "TOR_INSTALLED" "no"
     fi
 
-    # =============================================================
-    # ШАГ 9 — Psiphon (опционально)
-    # =============================================================
+    # ШАГ 9 — Psiphon
     if [[ "$ARG_PSIPHON" == "yes" ]]; then
         _step "Установка Psiphon"
         installPsiphon
@@ -344,48 +314,35 @@ EOF
         xpro_conf_set "PSIPHON_INSTALLED" "no"
     fi
 
-    # =============================================================
     # ШАГ 10 — BBR
-    # =============================================================
     if [[ "$ARG_BBR" == "yes" ]]; then
         _step "Включение BBR"
         enableBBR
         _ok "BBR включён"
     fi
 
-    # =============================================================
     # ШАГ 11 — Sysctl
-    # =============================================================
     _step "Применение sysctl оптимизаций"
     applySysctl
     _ok "Sysctl применён"
 
-    # =============================================================
     # ШАГ 12 — Fail2Ban
-    # =============================================================
     _step "Настройка Fail2Ban"
     setupFail2Ban
     _ok "Fail2Ban настроен"
 
-    # =============================================================
     # ШАГ 13 — UFW
-    # =============================================================
     if [[ "$ARG_UFW" == "on" ]]; then
         _step "Настройка UFW"
         setupUFW "$ARG_PORT" "$ARG_CDN"
         _ok "UFW настроен"
     fi
 
-    # =============================================================
     # ШАГ 14 — Команда xpro
-    # =============================================================
     _step "Установка команды xpro"
     setupAlias
     _ok "Команда xpro готова"
 
-    # =============================================================
-    # ИТОГОВЫЙ ЭКРАН
-    # =============================================================
     print_summary
 }
 
@@ -412,16 +369,12 @@ print_summary() {
     printf "║  %-45s║\n" ""
     echo "╠═══════════════════════════════════════════════╣"
 
-    # Outbound'ы
-    if [[ "$(xpro_conf_get WARP_INSTALLED)" == "yes" ]]; then
+    [[ "$(xpro_conf_get WARP_INSTALLED)" == "yes" ]] && \
         printf "║  WARP     ● socks5://127.0.0.1:%-14s║\n" "40000"
-    fi
-    if [[ "$(xpro_conf_get TOR_INSTALLED)" == "yes" ]]; then
+    [[ "$(xpro_conf_get TOR_INSTALLED)" == "yes" ]] && \
         printf "║  Tor      ● socks5://127.0.0.1:%-14s║\n" "40003"
-    fi
-    if [[ "$(xpro_conf_get PSIPHON_INSTALLED)" == "yes" ]]; then
+    [[ "$(xpro_conf_get PSIPHON_INSTALLED)" == "yes" ]] && \
         printf "║  Psiphon  ● socks5://127.0.0.1:%-14s║\n" "40002"
-    fi
 
     echo "╠═══════════════════════════════════════════════╣"
     printf "║  %-45s║\n" "Управление: xpro"
@@ -430,7 +383,6 @@ print_summary() {
     echo "╚═══════════════════════════════════════════════╝"
     echo ""
 
-    # Напоминание для CDN
     if [[ "$ARG_CDN" == "on" ]]; then
         _yellow "CDN включён. Убедись что в Cloudflare:"
         _yellow "  - DNS запись для ${ARG_DOMAIN} проксируется (оранжевое облако)"
@@ -438,7 +390,6 @@ print_summary() {
         echo ""
     fi
 
-    # Напоминание о прямом порте
     if [[ "$ARG_UFW" == "on" ]]; then
         _green "UFW активен. Прямой доступ к порту ${ARG_PORT} закрыт."
     else
