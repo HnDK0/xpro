@@ -55,6 +55,21 @@ _setDefaultCert() {
 }
 
 # =================================================================
+# NGINX RELOAD — безопасный, не падает если nginx ещё не запущен
+# =================================================================
+_nginx_reload() {
+    if nginx -t 2>/dev/null; then
+        # Пробуем reload, если не работает — start
+        systemctl reload nginx 2>/dev/null || \
+        systemctl restart nginx 2>/dev/null || \
+        systemctl start nginx 2>/dev/null || true
+    else
+        echo "${red}Ошибка конфига nginx. Проверь: nginx -t${reset}"
+        return 1
+    fi
+}
+
+# =================================================================
 # ОСНОВНОЙ КОНФИГ NGINX
 # =================================================================
 writeNginxConfig() {
@@ -64,9 +79,9 @@ writeNginxConfig() {
 
     _setDefaultCert
 
-    # Фейковый сайт — берём из xpro.conf или random
+    # Фейковый сайт — берём из xpro.conf или первый из списка
     local fake_url
-    fake_url=$(xpro_conf_get "FAKE_SITE_URL")
+    fake_url=$(xpro_conf_get "FAKE_SITE_URL" 2>/dev/null || true)
     [ -z "$fake_url" ] && fake_url="${FAKE_SITES[0]}"
 
     local fake_host
@@ -159,10 +174,7 @@ server {
         proxy_set_header Connection "upgrade";
     }
 
-    # WebSocket подключения Xray (все пути кроме /xui/)
-    # Клиенты подключаются через Xray inbound напрямую по своим путям
-    # Nginx проксирует их на порт Xray inbound (настраивается в 3x-ui)
-    # Пример: если в 3x-ui inbound port=10000
+    # WebSocket подключения Xray — настраивай под каждый inbound:
     # location /your-ws-path/ {
     #     proxy_pass http://127.0.0.1:10000;
     #     proxy_http_version 1.1;
@@ -191,12 +203,7 @@ server {
 }
 EOF
 
-    # Применяем конфиг
-    nginx -t && systemctl reload nginx || {
-        echo "${red}Ошибка конфига nginx. Проверь: nginx -t${reset}"
-        return 1
-    }
-
+    _nginx_reload
     echo "${green}Nginx конфиг записан для ${domain}${reset}"
 }
 
@@ -204,7 +211,7 @@ EOF
 # ФЕЙКОВЫЙ САЙТ
 # =================================================================
 setFakeSite() {
-    local mode="${1:-random}"   # random | url | menu
+    local mode="${1:-random}"
 
     local chosen_url=""
 
@@ -256,21 +263,16 @@ setFakeSite() {
     local fake_host
     fake_host=$(echo "$chosen_url" | sed 's|https://||;s|http://||;s|/.*||')
 
-    # Обновляем proxy_pass в конфиге
+    # Обновляем proxy_pass в конфиге если он уже существует
     if [ -f "$NGINX_XPRO_CONF" ]; then
         sed -i "s|proxy_pass https\?://[^;]*;|proxy_pass ${chosen_url};|" \
             "$NGINX_XPRO_CONF"
-        # Заменяем Host хедер фейкового сайта — он единственный без \$host
-        # (в location /xui/ используется \$host, у fake — реальное имя хоста)
-        sed -i "s|proxy_set_header Host ${fake_host_prev:-[^$][^;]*};|proxy_set_header Host ${fake_host};|" \
-            "$NGINX_XPRO_CONF" 2>/dev/null || true
-        # Надёжный fallback — заменяем последний proxy_set_header Host без $ 
-        python3 - "$NGINX_XPRO_CONF" "$fake_host" << 'PYEOF'
+        # Обновляем Host хедер фейкового сайта через python3
+        python3 - "$NGINX_XPRO_CONF" "$fake_host" << 'PYEOF' 2>/dev/null || true
 import sys, re
 path, new_host = sys.argv[1], sys.argv[2]
 with open(path) as f:
     content = f.read()
-# Заменяем Host в location / (fake site) — строка без \$host
 content = re.sub(
     r'(location\s*/\s*\{[^}]*proxy_set_header\s+Host\s+)([^$\s;][^;]*)(;)',
     lambda m: m.group(1) + new_host + m.group(3),
@@ -279,7 +281,7 @@ content = re.sub(
 with open(path, 'w') as f:
     f.write(content)
 PYEOF
-        nginx -t && systemctl reload nginx
+        _nginx_reload || true
     fi
 
     xpro_conf_set "FAKE_SITE_URL" "$chosen_url"
@@ -297,7 +299,6 @@ openPort80() {
 
 closePort80() {
     ufw status 2>/dev/null | grep -q "inactive" && return 0
-    # Удаляем все правила с комментарием ACME temp
     ufw status numbered 2>/dev/null | \
         grep 'ACME temp' | \
         awk -F'[][]' '{print $2}' | \
@@ -320,7 +321,6 @@ configSSL() {
         return 1
     }
 
-    # Устанавливаем socat и acme.sh
     installPackage "socat" || true
 
     if [ ! -f ~/.acme.sh/acme.sh ]; then
@@ -335,7 +335,6 @@ configSSL() {
     ~/.acme.sh/acme.sh --upgrade --auto-upgrade &>/dev/null
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
-    # Выбор метода получения сертификата
     echo ""
     echo "${cyan}Метод получения SSL сертификата:${reset}"
     echo "  ${green}1.${reset} Cloudflare DNS API (рекомендуется, домен не должен резолвиться на этот сервер)"
@@ -345,7 +344,6 @@ configSSL() {
     mkdir -p "$NGINX_CERT_DIR"
 
     if [ "$cert_method" = "1" ]; then
-        # Cloudflare DNS API
         [ -f "$CF_KEY_FILE" ] && source "$CF_KEY_FILE"
 
         if [[ -z "${CF_Email:-}" || -z "${CF_Key:-}" ]]; then
@@ -366,7 +364,6 @@ configSSL() {
         xpro_conf_set "SSL_METHOD" "dns_cf"
 
     else
-        # Standalone
         openPort80
         ~/.acme.sh/acme.sh --issue --standalone \
             -d "$domain" \
@@ -376,11 +373,10 @@ configSSL() {
         xpro_conf_set "SSL_METHOD" "standalone"
     fi
 
-    # Устанавливаем сертификат
     ~/.acme.sh/acme.sh --install-cert -d "$domain" \
         --key-file      "${NGINX_CERT_DIR}/cert.key" \
         --fullchain-file "${NGINX_CERT_DIR}/cert.pem" \
-        --reloadcmd     "systemctl reload nginx"
+        --reloadcmd     "systemctl reload nginx 2>/dev/null || true"
 
     xpro_conf_set "DOMAIN" "$domain"
     echo "${green}SSL сертификат установлен для ${domain}${reset}"
@@ -393,7 +389,6 @@ renewCert() {
         echo "${red}Домен не найден в конфиге${reset}"
         return 1
     }
-
     ~/.acme.sh/acme.sh --renew -d "$domain" --force
     echo "${green}Сертификат обновлён${reset}"
 }
@@ -418,7 +413,6 @@ checkCertExpiry() {
 
 # =================================================================
 # CLOUDFLARE REAL IP RESTORE
-# Скачивает актуальные IP диапазоны CF и пишет конфиг nginx
 # =================================================================
 setupRealIpRestore() {
     echo "${cyan}Обновляем Cloudflare IP диапазоны...${reset}"
@@ -452,11 +446,11 @@ setupRealIpRestore() {
     mkdir -p "$NGINX_CONF_DIR"
     mv -f "$tmp" "${NGINX_CONF_DIR}/real_ip_restore.conf"
 
-    nginx -t && systemctl reload nginx
+    # Не падаем если nginx ещё не запущен
+    _nginx_reload || true
     echo "${green}CF Real IP настроен${reset}"
 }
 
-# Cron для автообновления CF IP диапазонов раз в неделю
 setupCfIpCron() {
     cat > /etc/cron.d/xpro-cf-ips << 'EOF'
 # Обновление Cloudflare IP диапазонов каждый понедельник в 3:00
@@ -475,9 +469,8 @@ toggleCfGuard() {
         read -r confirm
         if [[ "$confirm" == "y" ]]; then
             rm -f "${NGINX_CONF_DIR}/cf_guard.conf"
-            # Убираем проверку из конфига домена
             sed -i '/cloudflare_ip.*!=.*1/d' "$NGINX_XPRO_CONF" 2>/dev/null || true
-            nginx -t && systemctl reload nginx
+            _nginx_reload || true
             echo "${green}CF Guard отключён${reset}"
         fi
     else
@@ -487,7 +480,6 @@ toggleCfGuard() {
         read -r confirm
         [[ "$confirm" != "y" ]] && return 0
 
-        # Скачиваем актуальные CF IP и строим geo блок
         local tmp
         tmp=$(mktemp) || return 1
 
@@ -514,13 +506,12 @@ toggleCfGuard() {
         echo "}" >> "$tmp"
         mv -f "$tmp" "${NGINX_CONF_DIR}/cf_guard.conf"
 
-        # Добавляем проверку в location /xui/
         if ! grep -q "cloudflare_ip" "$NGINX_XPRO_CONF" 2>/dev/null; then
             sed -i '/location \/xui\/ {/a\        if ($cloudflare_ip != 1) { return 444; }' \
                 "$NGINX_XPRO_CONF"
         fi
 
-        nginx -t && systemctl reload nginx
+        _nginx_reload || true
         echo "${green}CF Guard включён — только Cloudflare IP${reset}"
     fi
 }
@@ -540,7 +531,7 @@ nginxMenu() {
         nginx_status=$(getServiceStatus nginx)
         cert_expiry=$(checkCertExpiry)
         cf_guard=$(getCfGuardStatus)
-        fake_url=$(xpro_conf_get "FAKE_SITE_URL" || echo "не задан")
+        fake_url=$(xpro_conf_get "FAKE_SITE_URL" 2>/dev/null || echo "не задан")
 
         echo ""
         echo "${cyan}══════════════════════════════════════${reset}"
@@ -569,8 +560,7 @@ nginxMenu() {
             4) toggleCfGuard; read -r ;;
             5) setupRealIpRestore; read -r ;;
             6)
-                nginx -t && systemctl reload nginx && \
-                    echo "${green}Nginx перезапущен${reset}"
+                _nginx_reload && echo "${green}Nginx перезапущен${reset}"
                 read -r
                 ;;
             0) return 0 ;;

@@ -185,30 +185,17 @@ setupSwap() {
 
 # =================================================================
 # ALIAS — команда xpro
+# install.sh всегда скачивает menu.sh в XPRO_LIB при загрузке модулей,
+# поэтому берём только оттуда. Не полагаемся на BASH_SOURCE —
+# при запуске через bash <(curl ...) он указывает на /dev/fd/N.
 # =================================================================
 setupAlias() {
-    # Копируем menu.sh как исполняемый файл xpro
-    # Приоритет: рядом с install.sh > в lib > в lib/../ > BASH_SOURCE
-    local menu_src=""
-
-    if [ -f "${XPRO_LIB}/menu.sh" ]; then
-        menu_src="${XPRO_LIB}/menu.sh"
-    elif [ -f "${XPRO_LIB}/../menu.sh" ]; then
-        menu_src="${XPRO_LIB}/../menu.sh"
-    elif [ -n "${BASH_SOURCE[0]:-}" ] && \
-         [ -f "$(dirname "${BASH_SOURCE[0]}")/menu.sh" ]; then
-        menu_src="$(dirname "${BASH_SOURCE[0]}")/menu.sh"
-    fi
-
-    if [ -n "$menu_src" ]; then
-        cp "$menu_src" /usr/local/bin/xpro
-        # Также сохраняем копию в XPRO_LIB для надёжности
-        [ "$menu_src" != "${XPRO_LIB}/menu.sh" ] && \
-            cp "$menu_src" "${XPRO_LIB}/menu.sh" 2>/dev/null || true
-    else
-        echo "${red}Ошибка: menu.sh не найден. Скопируй вручную в /usr/local/bin/xpro${reset}"
+    if [ ! -f "${XPRO_LIB}/menu.sh" ]; then
+        echo "${red}Ошибка: menu.sh не найден в ${XPRO_LIB}${reset}"
+        echo "${red}Это не должно происходить — модули не были загружены?${reset}"
         return 1
     fi
+    cp "${XPRO_LIB}/menu.sh" /usr/local/bin/xpro
     chmod +x /usr/local/bin/xpro
     echo "info: Команда xpro установлена"
 }
