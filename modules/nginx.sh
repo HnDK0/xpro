@@ -179,8 +179,8 @@ server {
     proxy_cache     off;
 
     # Панель 3x-ui — путь из WebBasePath (скрытый от сканеров)
-    location /${web_path:-} {
-        proxy_pass http://127.0.0.1:${xui_port}/;
+    location = /${web_path:-} {
+        proxy_pass http://127.0.0.1:${xui_port};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;

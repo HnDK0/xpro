@@ -32,11 +32,33 @@ install3xui() {
 
     # Ждём запуска
     sleep 3
-
     systemctl enable x-ui &>/dev/null
+
+    # Генерируем свои credentials и устанавливаем через x-ui setting
+    local new_user new_pass new_port new_path
+    new_user=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 8)
+    new_pass=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
+    new_port=$(generateFreePort)
+    new_path=$(generateRandomPath)
+    # Убираем обрамляющие слеши из пути для webBasePath
+    new_path="${new_path#/}"; new_path="${new_path%/}"
+
+    echo "${cyan}Настройка credentials 3x-ui...${reset}"
+    x-ui setting -username "$new_user" -password "$new_pass" \
+        -port "$new_port" -webBasePath "/${new_path}/" &>/dev/null
+
     systemctl restart x-ui
+    sleep 2
+
+    # Сохраняем в xpro.conf
+    xpro_conf_set "XUI_USER" "$new_user"
+    xpro_conf_set "XUI_PASS" "$new_pass"
+    xpro_conf_set "XUI_PORT" "$new_port"
+    xpro_conf_set "XUI_WEB_BASE_PATH" "/${new_path}/"
 
     echo "${green}3x-ui установлен${reset}"
+    echo "${green}  Порт: ${new_port}${reset}"
+    echo "${green}  Путь: /${new_path}/${reset}"
 }
 
 update3xui() {
@@ -95,15 +117,11 @@ xuiGetPort() {
 }
 
 xuiGetUser() {
-    local user
-    user=$(_xui_settings_get "username")
-    echo "${user:-admin}"
+    _xui_settings_get "username"
 }
 
 xuiGetPass() {
-    local pass
-    pass=$(_xui_settings_get "password")
-    echo "${pass:-admin}"
+    _xui_settings_get "password"
 }
 
 # WebBasePath — рандомный путь панели (генерируется 3x-ui при установке)

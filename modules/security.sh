@@ -158,16 +158,19 @@ setupUFW() {
     # HTTPS всегда
     ufw allow 443/tcp comment 'HTTPS'
 
-    if [ "$cdn" = "on" ]; then
-        # При CDN — прямой порт 3x-ui закрыт снаружи
-        # Панель доступна только через nginx /xui/
-        echo "${yellow}CDN режим: порт панели ${xui_port} закрыт снаружи${reset}"
-        echo "${yellow}Панель доступна через: https://$(xpro_conf_get DOMAIN)/xui/${reset}"
-    else
-        # Без CDN — открываем порт панели
-        if [ -n "$xui_port" ]; then
-            ufw allow "${xui_port}/tcp" comment '3x-ui panel'
-        fi
+    # Порт панели 3x-ui НЕ открываем — панель доступна только через nginx на 443
+    echo "${yellow}Порт панели ${xui_port} закрыт снаружи.${reset}"
+    echo "${yellow}Панель доступна только через: https://$(xpro_conf_get DOMAIN)/${reset}"
+
+    # Удаляем старые правила порта панели (миграция со старых версий)
+    if [ -n "$xui_port" ]; then
+        ufw status numbered 2>/dev/null | \
+            grep "${xui_port}" | \
+            awk -F'[][]' '{print $2}' | \
+            sort -rn | \
+            while read -r n; do
+                echo "y" | ufw delete "$n" &>/dev/null
+            done
     fi
 
     echo "y" | ufw enable

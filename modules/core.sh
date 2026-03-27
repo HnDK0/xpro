@@ -299,10 +299,19 @@ checkServiceIP() {
 # =================================================================
 getServiceStatus() {
     local svc="$1"
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
-        echo "${green}RUNNING${reset}"
+    if [ "$svc" = "nginx" ]; then
+        # Для nginx: проверяем что процесс запущен И конфиг валиден
+        if systemctl is-active --quiet "$svc" 2>/dev/null && nginx -t &>/dev/null; then
+            echo "${green}RUNNING${reset}"
+        else
+            echo "${red}STOPPED${reset}"
+        fi
     else
-        echo "${red}STOPPED${reset}"
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            echo "${green}RUNNING${reset}"
+        else
+            echo "${red}STOPPED${reset}"
+        fi
     fi
 }
 
@@ -323,7 +332,7 @@ _pad() {
 generateRandomPath() {
     local path attempts=0
     while [ $attempts -lt 20 ]; do
-        path="/$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)"
+        path="/$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 24)"
         # Проверяем коллизию: путь не должен совпадать ни с одним
         # существующим location в nginx конфигах
         if ! grep -rqE "location[[:space:]]+[~*]*[[:space:]]*\"?${path}" \

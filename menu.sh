@@ -62,6 +62,8 @@ show_status() {
     local domain web_path panel_url
     domain=$(xpro_conf_get "DOMAIN" 2>/dev/null || echo "не задан")
     web_path=$(xuiGetWebBasePath 2>/dev/null || echo "")
+    # Убираем обрамляющие слеши из пути для корректного URL
+    web_path="${web_path#/}"; web_path="${web_path%/}"
     if [ -n "$web_path" ]; then
         panel_url="${domain}/${web_path}"
     else
@@ -186,8 +188,8 @@ handle_cli() {
             ;;
         "")
             # Без аргументов — запускаем меню
-            isRoot
             _load_modules
+            isRoot
             main_menu
             ;;
         *)

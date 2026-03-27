@@ -263,16 +263,10 @@ _fail2ban_is_done() {
 # UFW — проверяем что UFW активен и содержит наши базовые правила.
 # НЕ пропускаем если UFW выключен (inactive) — значит setupUFW не запускался.
 _ufw_is_done() {
-    local xui_port="$1"
-    local cdn="$2"
     # UFW должен быть активен
     ufw status 2>/dev/null | grep -q "^Status: active" || return 1
     # Правило HTTPS должно быть
     ufw status 2>/dev/null | grep -q "443" || return 1
-    # Если не CDN — правило для порта панели должно быть
-    if [ "$cdn" != "on" ] && [ -n "$xui_port" ]; then
-        ufw status 2>/dev/null | grep -q "$xui_port" || return 1
-    fi
     return 0
 }
 
@@ -583,19 +577,13 @@ print_summary() {
     server_ip=$(getServerIP 2>/dev/null || echo "?")
     ssl_info=$(checkCertExpiry 2>/dev/null || echo "?")
 
-    # Финальная синхронизация — credentials могли обновиться после всех шагов
-    sleep 2
-    xuiWaitForDB 5 2>/dev/null || true
-    local fresh_user fresh_pass
-    fresh_user=$(xuiGetUser 2>/dev/null || echo "")
-    fresh_pass=$(xuiGetPass 2>/dev/null || echo "")
-    [ -n "$fresh_user" ] && xui_user="$fresh_user"
-    [ -n "$fresh_pass" ] && xui_pass="$fresh_pass"
+    # Убираем обрамляющие слеши из пути для корректного URL
+    xui_path="${xui_path#/}"; xui_path="${xui_path%/}"
 
     if [ -n "$xui_path" ]; then
         panel_url="${domain}/${xui_path}"
     else
-        panel_url="${domain}  (путь не определён)"
+        panel_url="${domain}"
     fi
 
     echo ""
