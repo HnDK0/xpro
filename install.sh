@@ -6,15 +6,14 @@
 #
 # Аргументы:
 #   -panel    mhsanaei|alireza     (default: mhsanaei)
-#   -port     2053-65535           (default: random)
 #   -domain   example.com
 #   -cdn      on|off               (default: off)
-#   -warp     yes|no               (default: no)
-#   -tor      yes|no               (default: no)
-#   -psiphon  yes|no               (default: no)
+#   -warp     on|off               (default: off)
+#   -tor      on|off               (default: off)
+#   -psiphon  on|off               (default: off)
 #   -ufw      on|off               (default: off)
-#   -bbr      yes|no               (default: yes)
-#   -fake     yes|no               (default: yes)
+#   -bbr      on|off               (default: on)
+#   -fake     on|off               (default: on)
 # =================================================================
 
 # ВАЖНО: НЕ используем set -e — nginx reload на незапущенном nginx
@@ -37,15 +36,14 @@ MENU_URL="${REPO_RAW}/menu.sh"
 # ДЕФОЛТНЫЕ АРГУМЕНТЫ
 # =================================================================
 ARG_PANEL="mhsanaei"
-ARG_PORT=""
 ARG_DOMAIN=""
 ARG_CDN="off"
-ARG_WARP="no"
-ARG_TOR="no"
-ARG_PSIPHON="no"
+ARG_WARP="off"
+ARG_TOR="off"
+ARG_PSIPHON="off"
 ARG_UFW="off"
-ARG_BBR="yes"
-ARG_FAKE="yes"
+ARG_BBR="on"
+ARG_FAKE="on"
 ARG_SSL_METHOD=""
 
 # =================================================================
@@ -55,15 +53,14 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -panel)      ARG_PANEL="${2:-mhsanaei}";  shift 2 ;;
-            -port)       ARG_PORT="${2:-}";            shift 2 ;;
             -domain)     ARG_DOMAIN="${2:-}";          shift 2 ;;
             -cdn)        ARG_CDN="${2:-off}";          shift 2 ;;
-            -warp)       ARG_WARP="${2:-no}";          shift 2 ;;
-            -tor)        ARG_TOR="${2:-no}";           shift 2 ;;
-            -psiphon)    ARG_PSIPHON="${2:-no}";       shift 2 ;;
+            -warp)       ARG_WARP="${2:-off}";         shift 2 ;;
+            -tor)        ARG_TOR="${2:-off}";          shift 2 ;;
+            -psiphon)    ARG_PSIPHON="${2:-off}";      shift 2 ;;
             -ufw)        ARG_UFW="${2:-off}";          shift 2 ;;
-            -bbr)        ARG_BBR="${2:-yes}";          shift 2 ;;
-            -fake)       ARG_FAKE="${2:-yes}";         shift 2 ;;
+            -bbr)        ARG_BBR="${2:-on}";           shift 2 ;;
+            -fake)       ARG_FAKE="${2:-on}";          shift 2 ;;
             -ssl-method) ARG_SSL_METHOD="${2:-}";      shift 2 ;;
             -h|--help) print_usage; exit 0 ;;
             *) echo "Неизвестный аргумент: $1"; print_usage; exit 1 ;;
@@ -76,20 +73,19 @@ print_usage() {
 Использование: bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) [аргументы]
 
   -panel    mhsanaei|alireza     панель (default: mhsanaei)
-  -port     2053-65535           порт панели (default: random)
   -domain   example.com          домен для SSL
   -cdn      on|off               Cloudflare CDN (default: off)
-  -warp     yes|no               установить WARP (default: no)
-  -tor      yes|no               установить Tor (default: no)
-  -psiphon  yes|no               установить Psiphon (default: no)
+  -warp     on|off               установить WARP (default: off)
+  -tor      on|off               установить Tor (default: off)
+  -psiphon  on|off               установить Psiphon (default: off)
   -ufw      on|off               включить UFW (default: off)
-  -bbr      yes|no               включить BBR (default: yes)
-  -fake     yes|no               фейковый сайт (default: yes)
+  -bbr      on|off               включить BBR (default: on)
+  -fake     on|off               фейковый сайт (default: on)
   -ssl-method 1|2                метод SSL: 1=Cloudflare DNS API, 2=standalone HTTP (default: интерактивно)
 
 Примеры:
-  bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -warp yes
-  bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn on -warp yes -ufw on
+  bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -warp on
+  bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn on -warp on -ufw on
 EOF
 }
 
@@ -118,20 +114,13 @@ pre_checks() {
         _fail "Неверный формат домена: ${ARG_DOMAIN}"
     fi
 
-    if [[ -n "$ARG_PORT" ]]; then
-        if ! [[ "$ARG_PORT" =~ ^[0-9]+$ ]] || \
-           [ "$ARG_PORT" -lt 1024 ] || [ "$ARG_PORT" -gt 65535 ]; then
-            _fail "Порт должен быть от 1024 до 65535"
-        fi
-    fi
-
-    if [[ "$ARG_PSIPHON" == "yes" ]]; then
+    if [[ "$ARG_PSIPHON" == "on" ]]; then
         local arch; arch=$(uname -m)
         [[ "$arch" =~ ^(x86_64|aarch64|armv7l)$ ]] || \
             _fail "Psiphon не поддерживает архитектуру: $arch"
     fi
 
-    if [[ "$ARG_WARP" == "yes" && "$ARG_PSIPHON" == "yes" ]]; then
+    if [[ "$ARG_WARP" == "on" && "$ARG_PSIPHON" == "on" ]]; then
         _yellow "Внимание: WARP и Psiphon установлены оба."
         _yellow "В меню можно включить режим WARP+Psiphon."
     fi
@@ -172,20 +161,6 @@ load_modules() {
     for mod in core xui nginx warp tor psiphon security; do
         # shellcheck source=/dev/null
         source "${XPRO_LIB}/${mod}.sh"
-    done
-}
-
-# =================================================================
-# ГЕНЕРАЦИЯ СЛУЧАЙНОГО ПОРТА
-# =================================================================
-gen_random_port() {
-    local port
-    while true; do
-        port=$(shuf -i 10000-65000 -n 1)
-        if ! ss -tlnp 2>/dev/null | grep -q ":${port} "; then
-            echo "$port"
-            return
-        fi
     done
 }
 
@@ -312,7 +287,6 @@ main() {
     echo ""
     echo "  Панель:   $ARG_PANEL"
     echo "  Домен:    $ARG_DOMAIN"
-    echo "  Порт:     ${ARG_PORT:-random}"
     echo "  CDN:      $ARG_CDN"
     echo "  WARP:     $ARG_WARP"
     echo "  Tor:      $ARG_TOR"
@@ -345,11 +319,6 @@ main() {
     setupSwap
     _ok "Swap настроен"
 
-    if [[ -z "$ARG_PORT" ]]; then
-        ARG_PORT=$(gen_random_port)
-        _yellow "Случайный порт панели: $ARG_PORT"
-    fi
-
     xpro_conf_set "DOMAIN"    "$ARG_DOMAIN"
     xpro_conf_set "CDN"       "$ARG_CDN"
     xpro_conf_set "XUI_PANEL" "$ARG_PANEL"
@@ -363,7 +332,7 @@ main() {
         echo "info: 3x-ui уже установлен и запущен — пропускаем"
         _ok "3x-ui установлен"
     else
-        install3xui "$ARG_PANEL" "$ARG_PORT" || _fail "Не удалось установить 3x-ui"
+        install3xui "$ARG_PANEL" || _fail "Не удалось установить 3x-ui"
         _ok "3x-ui установлен"
     fi
 
@@ -408,7 +377,7 @@ main() {
     # =============================================================
     # ШАГ 4 — Фейковый сайт (ДО writeNginxConfig — URL должен быть в конфиге)
     # =============================================================
-    if [[ "$ARG_FAKE" == "yes" ]]; then
+    if [[ "$ARG_FAKE" == "on" ]]; then
         _step "Выбор фейкового сайта"
         # Пропускаем только если nginx конфиг уже существует для этого домена
         # (т.е. writeNginxConfig уже отработал с каким-то сайтом).
@@ -448,7 +417,7 @@ main() {
     # =============================================================
     # ШАГ 7 — WARP
     # =============================================================
-    if [[ "$ARG_WARP" == "yes" ]]; then
+    if [[ "$ARG_WARP" == "on" ]]; then
         _step "Установка Cloudflare WARP"
         if command -v warp-cli &>/dev/null && \
            systemctl is-active --quiet warp-svc 2>/dev/null && \
@@ -470,7 +439,7 @@ main() {
     # =============================================================
     # ШАГ 8 — Tor
     # =============================================================
-    if [[ "$ARG_TOR" == "yes" ]]; then
+    if [[ "$ARG_TOR" == "on" ]]; then
         _step "Установка Tor"
         if command -v tor &>/dev/null && \
            systemctl is-active --quiet tor 2>/dev/null && \
@@ -494,7 +463,7 @@ main() {
     # =============================================================
     # ШАГ 9 — Psiphon
     # =============================================================
-    if [[ "$ARG_PSIPHON" == "yes" ]]; then
+    if [[ "$ARG_PSIPHON" == "on" ]]; then
         _step "Установка Psiphon"
         if [ -f /usr/local/bin/psiphon-tunnel-core ] && \
            systemctl is-active --quiet psiphon 2>/dev/null && \
@@ -520,7 +489,7 @@ main() {
     # ШАГ 10 — BBR
     # BBR уже имеет проверку внутри enableBBR(), но делаем step-уровень
     # =============================================================
-    if [[ "$ARG_BBR" == "yes" ]]; then
+    if [[ "$ARG_BBR" == "on" ]]; then
         _step "Включение BBR"
         if [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = "bbr" ]; then
             _ok "BBR уже активен — пропускаем"

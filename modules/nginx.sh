@@ -10,21 +10,11 @@ CF_KEY_FILE="/root/.cloudflare_api"
 
 # Список фейковых сайтов для proxy_pass
 FAKE_SITES=(
-    "https://www.wikipedia.org"
-    "https://www.debian.org"
-    "https://www.ubuntu.com"
-    "https://www.kernel.org"
-    "https://www.gnu.org"
-    "https://www.python.org"
-    "https://www.nginx.org"
-    "https://www.openssl.org"
-    "https://www.archlinux.org"
-    "https://www.freebsd.org"
-    "https://www.openbsd.org"
-    "https://www.netbsd.org"
-    "https://www.mozilla.org"
-    "https://www.apache.org"
-    "https://www.postgresql.org"
+    "https://natribu.org"
+    "https://thatsthefinger.com"
+    "https://cat-bounce.com"
+    "https://hackertyper.net"
+    "https://theuselessweb.com"
 )
 
 # =================================================================
@@ -202,6 +192,13 @@ server {
         # WebSocket для 3x-ui (live logs, stats)
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
+
+        # Скрываем fingerprint-заголовки бэкенда
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header Via;
+        proxy_hide_header X-Cache;
+        proxy_hide_header X-Runtime;
+        proxy_hide_header Server;
     }
 
     # WebSocket подключения Xray — настраивай под каждый inbound:
@@ -226,6 +223,14 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_ssl_server_name on;
         proxy_read_timeout 60s;
+
+        # Скрываем fingerprint-заголовки фейкового сайта
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header Via;
+        proxy_hide_header X-Cache;
+        proxy_hide_header Content-Security-Policy;
+        proxy_hide_header X-Runtime;
+        proxy_hide_header Server;
     }
 
     access_log /var/log/nginx/access.log;

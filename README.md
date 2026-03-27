@@ -81,7 +81,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) 
 ### Полная установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn on -warp yes -tor off -ufw on -psiphon off -bbr yes -fake yes
+bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn on -warp on -tor off -ufw on -psiphon off -bbr on -fake on
 ```
 
 ### После установки
@@ -99,16 +99,15 @@ xpro status   # статус всех сервисов
 |---|---|---|---|
 | `-domain` | `example.com` | — | **Обязательный.** Домен для SSL и Nginx |
 | `-panel` | `mhsanaei` \| `alireza` | `mhsanaei` | Форк 3x-ui |
-| `-port` | `1024–65535` | случайный | Порт панели 3x-ui |
 | `-cdn` | `on` \| `off` | `off` | Cloudflare CDN режим |
-| `-warp` | `yes` \| `no` | `no` | Установить Cloudflare WARP |
-| `-tor` | `yes` \| `no` | `no` | Установить Tor |
-| `-psiphon` | `yes` \| `no` | `no` | Установить Psiphon |
+| `-warp` | `on` \| `off` | `off` | Установить Cloudflare WARP |
+| `-tor` | `on` \| `off` | `off` | Установить Tor |
+| `-psiphon` | `on` \| `off` | `off` | Установить Psiphon |
 | `-ufw` | `on` \| `off` | `off` | Настроить и включить UFW |
-| `-bbr` | `yes` \| `no` | `yes` | Включить TCP BBR |
-| `-fake` | `yes` \| `no` | `yes` | Установить фейковый сайт |
+| `-bbr` | `on` \| `off` | `on` | Включить TCP BBR |
+| `-fake` | `on` \| `off` | `on` | Установить фейковый сайт |
 
-> **Примечание:** `-port` сохраняется в `xpro.conf` после подтверждения реального порта из БД 3x-ui. Если порт занят — установщик автоматически выбирает свободный.
+> **Примечание:** Порт панели 3x-ui генерируется автоматически при установке.
 
 ---
 
@@ -182,7 +181,7 @@ TOR_CONTROL_PORT=40004
 
 | Функция | Описание |
 |---|---|
-| `install3xui [panel] [port]` | Устанавливает 3x-ui через официальный скрипт MHSanaei или Alireza |
+| `install3xui [panel]` | Устанавливает 3x-ui через официальный скрипт MHSanaei или Alireza |
 | `update3xui` | Обновляет до последней версии |
 | `remove3xui` | Полное удаление с подтверждением |
 

@@ -13,7 +13,6 @@ XUI_SERVICE="x-ui"
 # =================================================================
 install3xui() {
     local panel="${1:-mhsanaei}"
-    local port="${2:-}"
 
     echo "${cyan}Установка 3x-ui (${panel})...${reset}"
     [ -z "${PACKAGE_MANAGEMENT_INSTALL:-}" ] && identifyOS
@@ -33,11 +32,6 @@ install3xui() {
 
     # Ждём запуска
     sleep 3
-
-    # Меняем порт если задан и отличается от дефолтного
-    if [ -n "$port" ]; then
-        xuiSetPort "$port"
-    fi
 
     systemctl enable x-ui &>/dev/null
     systemctl restart x-ui
