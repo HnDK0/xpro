@@ -354,6 +354,8 @@ configSSL() {
     # Третий аргумент: "1" = Cloudflare DNS API, "2" = standalone HTTP.
     # Если не задан — спрашиваем интерактивно.
     local method="${3:-}"
+    local cf_email="${4:-}"
+    local cf_key="${5:-}"
 
     [ -z "$domain" ] && {
         echo "${red}Домен не указан${reset}"
@@ -388,14 +390,23 @@ configSSL() {
     mkdir -p "$NGINX_CERT_DIR"
 
     if [ "$cert_method" = "1" ]; then
-        [ -f "$CF_KEY_FILE" ] && source "$CF_KEY_FILE"
-
-        if [[ -z "${CF_Email:-}" || -z "${CF_Key:-}" ]]; then
-            read -rp "  Cloudflare Email: " CF_Email
-            read -rp "  Cloudflare Global API Key: " CF_Key
+        # Если cf_email и cf_key переданы как параметры — используем их
+        if [ -n "$cf_email" ] && [ -n "$cf_key" ]; then
+            CF_Email="$cf_email"
+            CF_Key="$cf_key"
             printf "export CF_Email='%s'\nexport CF_Key='%s'\n" \
                 "$CF_Email" "$CF_Key" > "$CF_KEY_FILE"
             chmod 600 "$CF_KEY_FILE"
+        else
+            # Иначе читаем из файла или спрашиваем интерактивно
+            [ -f "$CF_KEY_FILE" ] && source "$CF_KEY_FILE"
+            if [[ -z "${CF_Email:-}" || -z "${CF_Key:-}" ]]; then
+                read -rp "  Cloudflare Email: " CF_Email
+                read -rp "  Cloudflare Global API Key: " CF_Key
+                printf "export CF_Email='%s'\nexport CF_Key='%s'\n" \
+                    "$CF_Email" "$CF_Key" > "$CF_KEY_FILE"
+                chmod 600 "$CF_KEY_FILE"
+            fi
         fi
 
         export CF_Email CF_Key

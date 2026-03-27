@@ -45,6 +45,8 @@ ARG_UFW="off"
 ARG_BBR="on"
 ARG_FAKE="on"
 ARG_SSL_METHOD=""
+ARG_CF_EMAIL=""
+ARG_CF_KEY=""
 
 # =================================================================
 # ПАРСИНГ АРГУМЕНТОВ
@@ -62,6 +64,8 @@ parse_args() {
             -bbr)        ARG_BBR="${2:-on}";           shift 2 ;;
             -fake)       ARG_FAKE="${2:-on}";          shift 2 ;;
             -ssl-method) ARG_SSL_METHOD="${2:-}";      shift 2 ;;
+            -cf-email)   ARG_CF_EMAIL="${2:-}";        shift 2 ;;
+            -cf-key)     ARG_CF_KEY="${2:-}";          shift 2 ;;
             -h|--help) print_usage; exit 0 ;;
             *) echo "Неизвестный аргумент: $1"; print_usage; exit 1 ;;
         esac
@@ -72,20 +76,22 @@ print_usage() {
     cat << 'EOF'
 Использование: bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) [аргументы]
 
-  -panel    mhsanaei|alireza     панель (default: mhsanaei)
-  -domain   example.com          домен для SSL
-  -cdn      on|off               Cloudflare CDN (default: off)
-  -warp     on|off               установить WARP (default: off)
-  -tor      on|off               установить Tor (default: off)
-  -psiphon  on|off               установить Psiphon (default: off)
-  -ufw      on|off               включить UFW (default: off)
-  -bbr      on|off               включить BBR (default: on)
-  -fake     on|off               фейковый сайт (default: on)
-  -ssl-method 1|2                метод SSL: 1=Cloudflare DNS API, 2=standalone HTTP (default: интерактивно)
+  -panel      mhsanaei|alireza     панель (default: mhsanaei)
+  -domain     example.com          домен для SSL
+  -cdn        on|off               Cloudflare CDN (default: off)
+  -warp       on|off               установить WARP (default: off)
+  -tor        on|off               установить Tor (default: off)
+  -psiphon    on|off               установить Psiphon (default: off)
+  -ufw        on|off               включить UFW (default: off)
+  -bbr        on|off               включить BBR (default: on)
+  -fake       on|off               фейковый сайт (default: on)
+  -ssl-method 1|2                  метод SSL: 1=Cloudflare DNS API, 2=standalone HTTP (default: интерактивно)
+  -cf-email   user@example.com     Cloudflare Email (для ssl-method 1)
+  -cf-key     api_key              Cloudflare Global API Key (для ssl-method 1)
 
 Примеры:
   bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -warp on
-  bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn on -warp on -ufw on
+  bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -ufw on -ssl-method 1 -cf-email user@example.com -cf-key abc123
 EOF
 }
 
@@ -375,7 +381,7 @@ main() {
     if _ssl_is_done "$ARG_DOMAIN"; then
         _ok "SSL уже настроен — пропускаем"
     else
-        configSSL "$ARG_DOMAIN" "$ARG_CDN" "$ARG_SSL_METHOD" || _fail "Не удалось настроить SSL"
+        configSSL "$ARG_DOMAIN" "$ARG_CDN" "$ARG_SSL_METHOD" "$ARG_CF_EMAIL" "$ARG_CF_KEY" || _fail "Не удалось настроить SSL"
         _ok "SSL настроен"
     fi
 

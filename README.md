@@ -21,6 +21,7 @@
   4. Nginx / SSL
   5. Безопасность
   6. 3x-ui
+  7. Логи
   0. Выход
 ```
 
@@ -41,6 +42,7 @@
   - [tor.sh](#torsh)
   - [psiphon.sh](#psiphonsh)
   - [security.sh](#securitysh)
+  - [logs.sh](#logssh)
 - [Команда xpro](#команда-xpro)
 - [Порты сервисов](#порты-сервисов)
 - [Хранилище конфигурации](#хранилище-конфигурации)
@@ -77,10 +79,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) 
 
 Установит: 3x-ui (MHSanaei), Nginx, SSL, фейковый сайт, BBR, Fail2Ban, sysctl оптимизации.
 
-### Полная установка
+### Полная автоматическая установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn off -warp off -tor off -psiphon off -ufw on -bbr on -fake on
+bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) \
+  -domain example.com \
+  -ufw on \
+  -bbr on \
+  -ssl-method 1 \
+  -cf-email user@example.com \
+  -cf-key your_cloudflare_api_key
 ```
 
 ### После установки
@@ -106,8 +114,10 @@ xpro status   # статус всех сервисов
 | `-bbr` | `on` \| `off` | `on` | Включить TCP BBR |
 | `-fake` | `on` \| `off` | `on` | Установить фейковый сайт |
 | `-ssl-method` | `1` \| `2` | интерактивно | Метод SSL: 1=Cloudflare DNS API, 2=standalone HTTP |
+| `-cf-email` | `user@example.com` | — | Cloudflare Email (для ssl-method 1) |
+| `-cf-key` | `api_key` | — | Cloudflare Global API Key (для ssl-method 1) |
 
-> **Примечание:** Порт панели 3x-ui и WebBasePath генерируются автоматически при установке и читаются напрямую из БД через `x-ui settings`.
+> **Примечание:** Порт панели 3x-ui, логин, пароль и WebBasePath (24 символа) генерируются автоматически при установке через `x-ui setting`. Панель доступна только через HTTPS на порту 443 — прямой порт панели закрыт через UFW.
 
 ---
 
@@ -142,7 +152,8 @@ x-ui-pro/
     ├── warp.sh         # Cloudflare WARP
     ├── tor.sh          # Tor с мостами и выбором страны
     ├── psiphon.sh      # Psiphon (plain и WARP+Psiphon режимы)
-    └── security.sh     # UFW, BBR, Fail2Ban, SSH, IPv6, CPU Guard
+    ├── security.sh     # UFW, BBR, Fail2Ban, SSH, IPv6, CPU Guard
+    └── logs.sh         # Логи, logrotate, автоочистка
 ```
 
 После установки модули копируются в `/usr/local/lib/xpro/`, конфиг — в `/usr/local/etc/xpro/xpro.conf`.
@@ -219,16 +230,16 @@ TOR_CONTROL_PORT=40004
 | `update3xui` | Обновляет до последней версии, перезапускает сервис |
 | `remove3xui` | Полное удаление с подтверждением, очищает xpro.conf |
 
-**Порт и credentials — единый источник правды:**
+**Порт и credentials — генерируются скриптом:**
 
-Данные читаются через `x-ui settings` (официальная команда), а не напрямую из SQLite. Это обеспечивает совместимость при обновлениях 3x-ui.
+При установке скрипт сам генерирует порт (случайный 10000–65000), логин (8 символов), пароль (16 символов) и WebBasePath (24 символа), затем устанавливает их через `x-ui setting`. Это гарантирует что credentials всегда известны.
 
 | Функция | Описание |
 |---|---|
-| `xuiGetPort` | Порт панели из `x-ui settings`, fallback `2053` |
-| `xuiGetUser` | Логин панели, fallback `admin` |
-| `xuiGetPass` | Пароль панели, fallback `admin` |
-| `xuiGetWebBasePath` | Рандомный путь панели в формате `/path/` (генерируется 3x-ui при установке) |
+| `xuiGetPort` | Порт панели из `x-ui settings` |
+| `xuiGetUser` | Логин панели из `x-ui settings` |
+| `xuiGetPass` | Пароль панели из `x-ui settings` |
+| `xuiGetWebBasePath` | Путь панели в формате `/path/` из `x-ui settings` |
 | `xuiSetPort port` | Меняет порт через `x-ui setting -port`, перезапускает сервис |
 | `xuiWaitForDB [timeout]` | Ждёт инициализации БД: файл существует, порт числовой, user не пустой |
 
@@ -509,6 +520,47 @@ net.ipv4.tcp_keepalive_probes = 3
 ```
 
 IPv6 в этот файл **не пишется** — управляется через `toggleIPv6` отдельно.
+
+### logs.sh
+
+Управление логами: просмотр размера, очистка, ротация и автоочистка по расписанию.
+
+**Отслеживаемые логи:**
+
+| Файл | Описание |
+|---|---|
+| `/var/log/nginx/access.log` | Access log Nginx |
+| `/var/log/nginx/error.log` | Error log Nginx |
+| `/var/log/psiphon/psiphon.log` | Лог Psiphon |
+| `/var/log/tor/notices.log` | Лог Tor |
+| systemd journal | Логи 3x-ui, WARP (управляются через journalctl) |
+
+**Функции:**
+
+| Функция | Описание |
+|---|---|
+| `getLogsSize` | Общий размер файловых логов + journal |
+| `showLogsDetails` | Размер каждого файла отдельно |
+| `clearLogs` | Очистка файловых логов (`: > file`) + journal vacuum (50MB, 7 дней) |
+| `setupLogrotate` | Настройка ротации: Nginx — daily/7 дней, Psiphon/Tor — weekly/4 недели |
+| `setupLogClearCron` | Автоочистка каждое воскресенье в 04:00 через cron |
+| `removeLogClearCron` | Отключение автоочистки |
+| `getLogClearCronStatus` | Статус: `ON` / `OFF` |
+
+**Меню логов** (`xpro` → пункт 7):
+- Очистить логи сейчас (показывает сколько KB освобождено)
+- Показать детали (размер каждого файла)
+- Включить/выключить автоочистку (воскресенье 04:00)
+- Настроить logrotate
+
+**Logrotate** создаётся в `/etc/logrotate.d/xpro`:
+- Nginx: daily, rotate 7, compress, dateext
+- Psiphon/Tor: weekly, rotate 4, compress
+
+**Cron автоочистка:**
+- Скрипт: `/usr/local/bin/clear-logs.sh`
+- Расписание: `/etc/cron.d/xpro-clear-logs` — каждое воскресенье в 04:00
+- Действие: очищает файлы логов + journal vacuum до 50MB
 
 ---
 
