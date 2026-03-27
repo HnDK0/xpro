@@ -73,7 +73,7 @@
 ### Минимальная установка
 
 ```bash
-bash install.sh -domain example.com
+bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com
 ```
 
 Установит: 3x-ui (MHSanaei), Nginx, SSL, фейковый сайт, BBR, Fail2Ban, sysctl оптимизации.
@@ -81,13 +81,7 @@ bash install.sh -domain example.com
 ### Полная установка
 
 ```bash
-bash install.sh \
-  -domain example.com \
-  -cdn on \
-  -warp yes \
-  -tor yes \
-  -ufw on \
-  -bbr yes
+bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -cdn on -warp yes -tor off -ufw on -psiphon off -bbr yes -fake yes
 ```
 
 ### После установки
