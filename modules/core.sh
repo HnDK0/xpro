@@ -107,7 +107,7 @@ installPackage() {
 
     # Попытка починить зависимости и повторить
     echo "${yellow}warn: Пытаемся починить зависимости для $pkg...${reset}"
-    dpkg --configure -a 2>/dev/null || true
+    command -v dpkg &>/dev/null && dpkg --configure -a 2>/dev/null || true
     ${PACKAGE_MANAGEMENT_UPDATE} &>/dev/null || true
 
     if ${PACKAGE_MANAGEMENT_INSTALL} "$pkg"; then
@@ -316,10 +316,23 @@ _pad() {
 }
 
 # =================================================================
-# ГЕНЕРАЦИЯ СЛУЧАЙНОГО ПУТИ
+# ГЕНЕРАЦИЯ СЛУЧАЙНОГО ПУТИ (без коллизий с nginx locations)
 # =================================================================
 generateRandomPath() {
-    echo "/$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)"
+    local path attempts=0
+    while [ $attempts -lt 20 ]; do
+        path="/$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)"
+        # Проверяем коллизию: путь не должен совпадать ни с одним
+        # существующим location в nginx конфигах
+        if ! grep -rqE "location[[:space:]]+[~*]*[[:space:]]*\"?${path}" \
+                /etc/nginx/conf.d/ /etc/nginx/sites-enabled/ 2>/dev/null; then
+            echo "$path"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+    done
+    # После 20 попыток шанс коллизии пренебрежимо мал — отдаём последний
+    echo "$path"
 }
 
 # =================================================================

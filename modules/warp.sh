@@ -110,12 +110,21 @@ configWarp() {
     # Регистрация если нет
     if ! _warp_cmd registration show &>/dev/null; then
         _warp_cmd registration delete &>/dev/null || true
-        local attempts=0
+        local attempts=0 registered=0
         while [ $attempts -lt 3 ]; do
-            _warp_cmd registration new && break
+            if _warp_cmd registration new; then
+                registered=1
+                break
+            fi
             attempts=$((attempts + 1))
+            echo "${yellow}Попытка регистрации $((attempts+1))/3...${reset}"
             sleep 3
         done
+        if [ "$registered" -eq 0 ]; then
+            echo "${red}Ошибка: регистрация WARP не удалась после 3 попыток${reset}"
+            echo "${yellow}Проверь доступность сети или попробуй позже${reset}"
+            return 1
+        fi
     fi
 
     # Режим proxy (SOCKS5)

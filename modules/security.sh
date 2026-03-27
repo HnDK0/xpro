@@ -258,9 +258,25 @@ changeSshPort() {
     sed -i "s/^#\?Port [0-9]*/Port ${new_port}/" /etc/ssh/sshd_config
     systemctl restart sshd 2>/dev/null || systemctl restart ssh
 
+    # Проверяем что новый порт слушает
+    sleep 2
+    if ss -tlnp 2>/dev/null | grep -q ":${new_port} "; then
+        echo "${green}SSH слушает на порту ${new_port}${reset}"
+    else
+        echo "${red}ВНИМАНИЕ: SSH не слушает на порту ${new_port}!${reset}"
+        echo "${red}Проверь: journalctl -u sshd -n 10${reset}"
+        echo "${yellow}НЕ закрывай текущую SSH сессию!${reset}"
+    fi
+
+    # Обновляем Fail2Ban — иначе SSH остаётся без защиты на новом порту
+    if [ -f /etc/fail2ban/jail.local ]; then
+        sed -i "s/^port\s*=.*/port     = ${new_port}/" /etc/fail2ban/jail.local
+        systemctl restart fail2ban 2>/dev/null || true
+        echo "${green}Fail2Ban обновлён для порта ${new_port}${reset}"
+    fi
+
     echo "${green}SSH порт изменён на ${new_port}${reset}"
     echo "${yellow}Старое правило UFW для порта ${current_port} можно удалить вручную${reset}"
-    echo "${yellow}НЕ закрывай текущую SSH сессию до проверки нового порта!${reset}"
 }
 
 # =================================================================
@@ -282,25 +298,22 @@ toggleIPv6() {
         sysctl -w net.ipv6.conf.default.disable_ipv6=0 &>/dev/null
         sysctl -w net.ipv6.conf.lo.disable_ipv6=0 &>/dev/null
         sysctl -w net.ipv6.icmp.echo_ignore_all=0 &>/dev/null
-        sed -i '/disable_ipv6/d; /ipv6.*icmp.*ignore/d' \
-            /etc/sysctl.d/99-xpro.conf 2>/dev/null || true
+        rm -f /etc/sysctl.d/99-xpro-ipv6.conf
         echo "${green}IPv6 включён${reset}"
     else
-        # Выключаем IPv6
+        # Выключаем IPv6 — пишем в отдельный файл, не трогаем network.conf
         sysctl -w net.ipv6.conf.all.disable_ipv6=1 &>/dev/null
         sysctl -w net.ipv6.conf.default.disable_ipv6=1 &>/dev/null
         sysctl -w net.ipv6.conf.lo.disable_ipv6=1 &>/dev/null
         sysctl -w net.ipv6.icmp.echo_ignore_all=1 &>/dev/null
 
-        if ! grep -q "disable_ipv6" /etc/sysctl.d/99-xpro.conf 2>/dev/null; then
-            cat >> /etc/sysctl.d/99-xpro.conf << 'SYSCTL'
-# IPv6
+        cat > /etc/sysctl.d/99-xpro-ipv6.conf << 'SYSCTL'
+# IPv6 — управляется через xpro → Безопасность → Переключить IPv6
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 net.ipv6.icmp.echo_ignore_all = 1
 SYSCTL
-        fi
         echo "${red}IPv6 отключён${reset}"
     fi
 }
@@ -376,7 +389,9 @@ removeCpuGuard() {
 # SYSCTL ОПТИМИЗАЦИИ
 # =================================================================
 applySysctl() {
-    cat > /etc/sysctl.d/99-xpro.conf << 'SYSCTL'
+    # Сетевые оптимизации — отдельный файл, не затрагивает IPv6.
+    # IPv6 управляется toggleIPv6() через 99-xpro-ipv6.conf.
+    cat > /etc/sysctl.d/99-xpro-network.conf << 'SYSCTL'
 # ICMP ignore — скрываем сервер от ping
 net.ipv4.icmp_echo_ignore_all = 1
 
@@ -390,12 +405,8 @@ net.ipv4.tcp_keepalive_intvl = 10
 net.ipv4.tcp_keepalive_probes = 3
 SYSCTL
 
-    # IPv6 НЕ трогаем здесь — управляется через toggleIPv6()
-    # Если IPv6 уже был отключён через toggleIPv6, настройки сохранены
-    # в отдельном блоке файла 99-xpro.conf и не перезаписываются
-
     sysctl --system &>/dev/null
-    sysctl -p /etc/sysctl.d/99-xpro.conf &>/dev/null
+    sysctl -p /etc/sysctl.d/99-xpro-network.conf &>/dev/null
     echo "${green}Sysctl оптимизации применены${reset}"
 }
 

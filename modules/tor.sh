@@ -119,7 +119,9 @@ _fetchTorGpgKey() {
     local keyring="/usr/share/keyrings/tor-archive-keyring.gpg"
     local mirror
 
-    for mirror in "$primary_mirror" "${_TOR_MIRRORS[@]}"; do
+    # Сначала пробуем primary_mirror, затем остальные (исключая дубликат)
+    for mirror in "${_TOR_MIRRORS[@]}"; do
+        [ "$mirror" = "$primary_mirror" ] && continue
         local asc_url="https://${mirror}/${_TOR_GPG_FP}.asc"
         if curl -fsSL \
                 --connect-timeout 8 \
@@ -220,11 +222,15 @@ installTor() {
 
             local mirror installed=0
             if mirror=$(_findTorMirror); then
-                # Пробуем найденное зеркало, затем остальные по порядку
+                # Строим список: найденное зеркало первым, остальные без него
+                local try_mirrors=("$mirror")
                 local m
-                for m in "$mirror" "${_TOR_MIRRORS[@]}"; do
-                    [ "$m" = "$mirror" ] && { _installTorFromMirror "$m" "$codename" && installed=1 && break || continue; }
-                    echo "${yellow}Пробуем следующее зеркало: ${m}${reset}"
+                for m in "${_TOR_MIRRORS[@]}"; do
+                    [ "$m" != "$mirror" ] && try_mirrors+=("$m")
+                done
+
+                for m in "${try_mirrors[@]}"; do
+                    echo "${yellow}Пробуем зеркало: ${m}${reset}"
                     _installTorFromMirror "$m" "$codename" && installed=1 && break
                 done
             fi
@@ -338,7 +344,7 @@ EOF
             cat >> "$TOR_CONFIG" << 'EOF'
 UseBridges 1
 ClientTransportPlugin snowflake exec /usr/bin/snowflake-client
-Bridge snowflake 192.0.2.3:1
+Bridge snowflake 0.0.3.4:1 2B280B23E1107BB62ABFC40DDCC8824814F80A72
 EOF
             ;;
         meek-azure)

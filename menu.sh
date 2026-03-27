@@ -101,14 +101,14 @@ show_status() {
     printf "   ${red}X-UI PRO v${XPRO_VERSION}${reset}  %s  %s %s\n" \
         "$(date +'%d.%m.%Y %H:%M')" "$flag" "$server_ip"
     echo "${cyan}================================================================${reset}"
-    echo -e "  $(printf "%-9s" "3x-ui:")$xui_status  ${cyan}${panel_url}${reset}"
-    echo -e "  $(printf "%-9s" "Nginx:")$nginx_status  SSL: $cert_expiry"
-    echo -e "  $(printf "%-9s" "SSH:")${green}port ${ssh_port}${reset}"
-    echo -e "${cyan}----------------------------------------------------------------${reset}"
-    echo -e "  $(printf "%-9s" "WARP:")$warp_s"
-    echo -e "  $(printf "%-9s" "Tor:")$tor_s"
-    echo -e "  $(printf "%-9s" "Psiphon:")$psiphon_s"
-    echo -e "${cyan}================================================================${reset}"
+    printf "  %-9s%b  ${cyan}%s${reset}\n" "3x-ui:" "$xui_status" "$panel_url"
+    printf "  %-9s%b  SSL: %b\n"           "Nginx:"  "$nginx_status" "$cert_expiry"
+    printf "  %-9s${green}port %s${reset}\n" "SSH:" "$ssh_port"
+    printf "${cyan}----------------------------------------------------------------${reset}\n"
+    printf "  %-9s%b\n" "WARP:"    "$warp_s"
+    printf "  %-9s%b\n" "Tor:"     "$tor_s"
+    printf "  %-9s%b\n" "Psiphon:" "$psiphon_s"
+    echo "${cyan}================================================================${reset}"
     echo ""
 }
 
@@ -216,7 +216,11 @@ _uninstall_xpro() {
     # Удаляем сервисы если установлены
     [ "$(xpro_conf_get WARP_INSTALLED)" = "yes" ] && {
         echo "${cyan}Удаляем WARP...${reset}"
-        _warp_cmd disconnect 2>/dev/null || true
+        if command -v warp-cli &>/dev/null; then
+            if type _warp_cmd &>/dev/null; then
+                _warp_cmd disconnect 2>/dev/null || true
+            fi
+        fi
         systemctl stop warp-svc 2>/dev/null || true
         systemctl disable warp-svc 2>/dev/null || true
         uninstallPackage "cloudflare-warp" 2>/dev/null || true

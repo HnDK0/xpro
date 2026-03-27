@@ -37,10 +37,10 @@ getPsiphonStatus() {
     # Страна
     if [ -f "$PSIPHON_CONFIG" ]; then
         local country
-        country=$(python3 -c "
-import json, sys
+        country=$(PSIPHON_CONFIG_PATH="$PSIPHON_CONFIG" python3 -c "
+import json, os
 try:
-    d=json.load(open('$PSIPHON_CONFIG'))
+    d=json.load(open(os.environ['PSIPHON_CONFIG_PATH']))
     r=d.get('EgressRegion','')
     print(r if r else '')
 except: pass
@@ -69,10 +69,10 @@ getPsiphonMode() {
 
 getPsiphonCountry() {
     if [ -f "$PSIPHON_CONFIG" ]; then
-        python3 -c "
-import json
+        PSIPHON_CONFIG_PATH="$PSIPHON_CONFIG" python3 -c "
+import json, os
 try:
-    d=json.load(open('$PSIPHON_CONFIG'))
+    d=json.load(open(os.environ['PSIPHON_CONFIG_PATH']))
     print(d.get('EgressRegion','') or 'auto')
 except: print('auto')
 " 2>/dev/null
@@ -143,34 +143,45 @@ writePsiphonConfig() {
     xpro_conf_set "PSIPHON_MODE" "$mode"
 
     # Генерируем JSON конфиг через python3
-    python3 - << PYEOF
+    # Ключ передаётся через переменную окружения — shell expansion внутри heredoc
+    # не затронет спецсимволы RSA ключа (=, +, /).
+    PSIPHON_KEY_ENV="$PSIPHON_REMOTE_SERVER_LIST_KEY" \
+    PSIPHON_URL_ENV="$PSIPHON_REMOTE_SERVER_LIST_URL" \
+    PSIPHON_CHANNEL_ENV="$PSIPHON_PROPAGATION_CHANNEL" \
+    PSIPHON_SPONSOR_ENV="$PSIPHON_SPONSOR_ID" \
+    PSIPHON_PORT_ENV="$PSIPHON_PORT" \
+    PSIPHON_DATA_ENV="$PSIPHON_DATA_DIR" \
+    PSIPHON_CONFIG_ENV="$PSIPHON_CONFIG" \
+    PSIPHON_UPSTREAM_ENV="${upstream_proxy}" \
+    PSIPHON_COUNTRY_ENV="${country}" \
+    python3 - << 'PYEOF'
 import json, os
 
 cfg = {
-    "PropagationChannelId": "${PSIPHON_PROPAGATION_CHANNEL}",
-    "SponsorId": "${PSIPHON_SPONSOR_ID}",
-    "LocalSocksProxyPort": ${PSIPHON_PORT},
-    "LocalHttpProxyPort": 0,
+    "PropagationChannelId": os.environ["PSIPHON_CHANNEL_ENV"],
+    "SponsorId":            os.environ["PSIPHON_SPONSOR_ENV"],
+    "LocalSocksProxyPort":  int(os.environ["PSIPHON_PORT_ENV"]),
+    "LocalHttpProxyPort":   0,
     "DisableLocalSocksProxy": False,
-    "DisableLocalHTTPProxy": True,
-    "EgressRegion": "${country}",
-    "DataRootDirectory": "${PSIPHON_DATA_DIR}",
-    "RemoteServerListDownloadFilename": "${PSIPHON_DATA_DIR}/remote_server_list",
-    "RemoteServerListUrl": "${PSIPHON_REMOTE_SERVER_LIST_URL}",
-    "RemoteServerListSignaturePublicKey": "${PSIPHON_REMOTE_SERVER_LIST_KEY}",
-    "MigrateDataStoreDirectory": "${PSIPHON_DATA_DIR}",
-    "ClientPlatform": "Android_4.0.4_com.example.exampleClientLibraryApp",
-    "ClientVersion": "1",
+    "DisableLocalHTTPProxy":  True,
+    "EgressRegion":         os.environ["PSIPHON_COUNTRY_ENV"],
+    "DataRootDirectory":    os.environ["PSIPHON_DATA_ENV"],
+    "RemoteServerListDownloadFilename": os.environ["PSIPHON_DATA_ENV"] + "/remote_server_list",
+    "RemoteServerListUrl":  os.environ["PSIPHON_URL_ENV"],
+    "RemoteServerListSignaturePublicKey": os.environ["PSIPHON_KEY_ENV"],
+    "MigrateDataStoreDirectory": os.environ["PSIPHON_DATA_ENV"],
+    "ClientPlatform":  "Android_4.0.4_com.example.exampleClientLibraryApp",
+    "ClientVersion":   "1",
     "TunnelWholeDevice": 0,
     "EmitBytesTransferred": False,
     "EmitSLOK": False,
 }
 
-upstream = "${upstream_proxy}"
+upstream = os.environ.get("PSIPHON_UPSTREAM_ENV", "")
 if upstream:
     cfg["UpstreamProxyUrl"] = upstream
 
-with open("${PSIPHON_CONFIG}", "w") as f:
+with open(os.environ["PSIPHON_CONFIG_ENV"], "w") as f:
     json.dump(cfg, f, indent=4)
 
 print("Psiphon конфиг записан")

@@ -46,6 +46,7 @@ ARG_PSIPHON="no"
 ARG_UFW="off"
 ARG_BBR="yes"
 ARG_FAKE="yes"
+ARG_SSL_METHOD=""
 
 # =================================================================
 # ПАРСИНГ АРГУМЕНТОВ
@@ -53,16 +54,17 @@ ARG_FAKE="yes"
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -panel)   ARG_PANEL="${2:-mhsanaei}";  shift 2 ;;
-            -port)    ARG_PORT="${2:-}";            shift 2 ;;
-            -domain)  ARG_DOMAIN="${2:-}";          shift 2 ;;
-            -cdn)     ARG_CDN="${2:-off}";          shift 2 ;;
-            -warp)    ARG_WARP="${2:-no}";          shift 2 ;;
-            -tor)     ARG_TOR="${2:-no}";           shift 2 ;;
-            -psiphon) ARG_PSIPHON="${2:-no}";       shift 2 ;;
-            -ufw)     ARG_UFW="${2:-off}";          shift 2 ;;
-            -bbr)     ARG_BBR="${2:-yes}";          shift 2 ;;
-            -fake)    ARG_FAKE="${2:-yes}";         shift 2 ;;
+            -panel)      ARG_PANEL="${2:-mhsanaei}";  shift 2 ;;
+            -port)       ARG_PORT="${2:-}";            shift 2 ;;
+            -domain)     ARG_DOMAIN="${2:-}";          shift 2 ;;
+            -cdn)        ARG_CDN="${2:-off}";          shift 2 ;;
+            -warp)       ARG_WARP="${2:-no}";          shift 2 ;;
+            -tor)        ARG_TOR="${2:-no}";           shift 2 ;;
+            -psiphon)    ARG_PSIPHON="${2:-no}";       shift 2 ;;
+            -ufw)        ARG_UFW="${2:-off}";          shift 2 ;;
+            -bbr)        ARG_BBR="${2:-yes}";          shift 2 ;;
+            -fake)       ARG_FAKE="${2:-yes}";         shift 2 ;;
+            -ssl-method) ARG_SSL_METHOD="${2:-}";      shift 2 ;;
             -h|--help) print_usage; exit 0 ;;
             *) echo "Неизвестный аргумент: $1"; print_usage; exit 1 ;;
         esac
@@ -83,6 +85,7 @@ print_usage() {
   -ufw      on|off               включить UFW (default: off)
   -bbr      yes|no               включить BBR (default: yes)
   -fake     yes|no               фейковый сайт (default: yes)
+  -ssl-method 1|2                метод SSL: 1=Cloudflare DNS API, 2=standalone HTTP (default: интерактивно)
 
 Примеры:
   bash <(curl -fsSL https://raw.githubusercontent.com/HnDK0/xpro/main/install.sh) -domain example.com -warp yes
@@ -109,6 +112,11 @@ pre_checks() {
     [[ "$EUID" -ne 0 ]] && _fail "Запусти от root: sudo bash install.sh"
     [[ "$(uname)" != "Linux" ]] && _fail "Только Linux"
     [[ -z "$ARG_DOMAIN" ]] && _fail "Укажи домен: -domain example.com"
+
+    # Валидация формата домена — защита от инъекций в nginx конфиг
+    if ! [[ "$ARG_DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)+$ ]]; then
+        _fail "Неверный формат домена: ${ARG_DOMAIN}"
+    fi
 
     if [[ -n "$ARG_PORT" ]]; then
         if ! [[ "$ARG_PORT" =~ ^[0-9]+$ ]] || \
@@ -137,18 +145,16 @@ load_modules() {
 
     mkdir -p "$XPRO_LIB" "$XPRO_CONF_DIR"
 
-    # Если запуск из локальной копии репо — подключаем напрямую
-    local script_dir=""
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || true
-
-    if [[ -n "$script_dir" && -d "${script_dir}/modules" ]]; then
+    # Локальный запуск: задай XPRO_LOCAL_DIR=/path/to/repo перед вызовом скрипта.
+    # BASH_SOURCE[0] при bash <(curl ...) указывает на /dev/fd/N — ненадёжно.
+    if [[ -n "${XPRO_LOCAL_DIR:-}" && -d "${XPRO_LOCAL_DIR}/modules" ]]; then
         for mod in core xui nginx warp tor psiphon security; do
-            cp "${script_dir}/modules/${mod}.sh" "${XPRO_LIB}/${mod}.sh" || \
+            cp "${XPRO_LOCAL_DIR}/modules/${mod}.sh" "${XPRO_LIB}/${mod}.sh" || \
                 _fail "Не удалось скопировать ${mod}.sh"
         done
-        [[ -f "${script_dir}/menu.sh" ]] && \
-            cp "${script_dir}/menu.sh" "${XPRO_LIB}/menu.sh"
-        _ok "Модули загружены из локальной копии"
+        [[ -f "${XPRO_LOCAL_DIR}/menu.sh" ]] && \
+            cp "${XPRO_LOCAL_DIR}/menu.sh" "${XPRO_LIB}/menu.sh"
+        _ok "Модули загружены из локальной копии (${XPRO_LOCAL_DIR})"
     else
         # Скачиваем с GitHub
         for mod in core xui nginx warp tor psiphon security; do
@@ -286,7 +292,7 @@ _ufw_is_done() {
 
 # Sysctl — проверяем что наш файл уже существует с нужным содержимым
 _sysctl_is_done() {
-    local f="/etc/sysctl.d/99-xpro.conf"
+    local f="/etc/sysctl.d/99-xpro-network.conf"
     [ -f "$f" ] || return 1
     grep -q "somaxconn" "$f" 2>/dev/null || return 1
     grep -q "tcp_keepalive" "$f" 2>/dev/null || return 1
@@ -395,7 +401,7 @@ main() {
     if _ssl_is_done "$ARG_DOMAIN"; then
         _ok "SSL уже настроен — пропускаем"
     else
-        configSSL "$ARG_DOMAIN" "$ARG_CDN" || _fail "Не удалось настроить SSL"
+        configSSL "$ARG_DOMAIN" "$ARG_CDN" "$ARG_SSL_METHOD" || _fail "Не удалось настроить SSL"
         _ok "SSL настроен"
     fi
 
@@ -419,7 +425,7 @@ main() {
     # ШАГ 5 — Nginx конфиг (cert и fake_url уже готовы)
     # =============================================================
     _step "Настройка Nginx reverse proxy"
-    if ! _nginx_conf_needs_update "$ARG_DOMAIN"; then
+    if _nginx_conf_is_current "$ARG_DOMAIN"; then
         _ok "Nginx конфиг актуален — пропускаем"
     else
         writeNginxConfig "$ARG_DOMAIN" "$ARG_CDN" || \
@@ -450,7 +456,7 @@ main() {
             _ok "WARP уже установлен и запущен — пропускаем"
         else
             installWarp || _fail "Не удалось установить WARP"
-            configWarp
+            configWarp || _fail "Не удалось настроить WARP"
             sleep 3
             addWarpOutbound || \
                 _yellow "warn: Outbound WARP — добавь вручную: xpro → WARP → Добавить outbound"
@@ -473,7 +479,7 @@ main() {
         else
             installTor || _fail "Не удалось установить Tor"
             configTor
-            startTor
+            startTor || _fail "Tor не запустился"
             enableTor
             sleep 3
             addTorOutbound || \
@@ -498,7 +504,7 @@ main() {
             installPsiphon || _fail "Не удалось установить Psiphon"
             writePsiphonConfig "" "plain"
             writePsiphonService
-            startPsiphon
+            startPsiphon || _fail "Psiphon не запустился"
             enablePsiphon
             sleep 5
             addPsiphonOutbound || \
@@ -590,10 +596,10 @@ print_summary() {
     sleep 2
     xuiWaitForDB 5 2>/dev/null || true
     local fresh_user fresh_pass
-    fresh_user=$(xuiGetUser 2>/dev/null || echo "$xui_user")
-    fresh_pass=$(xuiGetPass 2>/dev/null || echo "$xui_pass")
-    [ "$fresh_user" != "admin" ] && xui_user="$fresh_user"
-    [ "$fresh_pass" != "admin" ] && xui_pass="$fresh_pass"
+    fresh_user=$(xuiGetUser 2>/dev/null || echo "")
+    fresh_pass=$(xuiGetPass 2>/dev/null || echo "")
+    [ -n "$fresh_user" ] && xui_user="$fresh_user"
+    [ -n "$fresh_pass" ] && xui_pass="$fresh_pass"
 
     if [ -n "$xui_path" ]; then
         panel_url="${domain}/${xui_path}"

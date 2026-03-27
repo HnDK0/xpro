@@ -138,14 +138,16 @@ xuiWaitForDB() {
     local elapsed=0
     echo -n "  Ожидание инициализации БД"
     while [ "$elapsed" -lt "$timeout" ]; do
-        local test_port test_user
-        test_port=$(xuiGetPort)
-        test_user=$(xuiGetUser)
-        if [[ "$test_port" =~ ^[0-9]+$ ]] && \
-           [ -n "$test_user" ] && \
-           [ "$test_user" != "admin" ]; then
-            echo " [OK]"
-            return 0
+        # Первичный маркер: файл БД существует и не пустой
+        if [ -f "$XUI_DB" ] && [ -s "$XUI_DB" ]; then
+            local test_port test_user
+            test_port=$(xuiGetPort)
+            test_user=$(xuiGetUser)
+            # Порт должен быть числом, user — непустым
+            if [[ "$test_port" =~ ^[0-9]+$ ]] && [ -n "$test_user" ]; then
+                echo " [OK]"
+                return 0
+            fi
         fi
         sleep 1
         echo -n "."
@@ -174,7 +176,10 @@ xuiApiLogin() {
     user=$(xuiGetUser)
     pass=$(xuiGetPass)
     base_url=$(_xuiBaseUrl)
+    # xuiGetWebBasePath() возвращает /path/ — убираем обрамляющие слеши,
+    # иначе URL получается http://127.0.0.1:PORT//path//login → 404.
     web_path=$(xuiGetWebBasePath)
+    web_path="${web_path#/}"; web_path="${web_path%/}"
 
     # Путь логина зависит от WebBasePath
     if [ -n "$web_path" ]; then
@@ -193,6 +198,7 @@ xuiApiLogin() {
     if echo "$response" | grep -q '"success":true'; then
         return 0
     else
+        rm -f "$_XUI_COOKIE_FILE"
         echo "${red}Ошибка авторизации в 3x-ui API${reset}"
         echo "${yellow}Проверь credentials: user=${user}, path=/${web_path}/${reset}"
         return 1
@@ -207,6 +213,7 @@ _xuiApiCall() {
     local base_url web_path
     base_url=$(_xuiBaseUrl)
     web_path=$(xuiGetWebBasePath)
+    web_path="${web_path#/}"; web_path="${web_path%/}"
 
     # Если cookie нет — логинимся
     [ ! -f "$_XUI_COOKIE_FILE" ] && xuiApiLogin

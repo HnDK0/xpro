@@ -70,17 +70,19 @@ _nginx_reload() {
 }
 
 # Проверка: нужно ли пересоздавать конфиг (порт изменился или файл отсутствует)
-_nginx_conf_needs_update() {
+# Возвращает 0 (true) если конфиг актуален и ничего делать не нужно,
+# 1 (false) если нужна перезапись.
+_nginx_conf_is_current() {
     local domain="$1"
     local xpro_conf="${NGINX_CONF_DIR:-/etc/nginx/conf.d}/xpro.conf"
-    [ -f "$xpro_conf" ] || return 0
-    grep -qF "server_name ${domain}" "$xpro_conf" || return 0
+    [ -f "$xpro_conf" ] || return 1
+    grep -qF "server_name ${domain}" "$xpro_conf" || return 1
     local cfg_port db_port
     cfg_port=$(grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' "$xpro_conf" | head -1)
     db_port=$(xuiGetPort)
-    [ "$cfg_port" = "$db_port" ] || return 0
-    nginx -t &>/dev/null || return 0
-    return 1
+    [ "$cfg_port" = "$db_port" ] || return 1
+    nginx -t &>/dev/null || return 1
+    return 0
 }
 
 # =================================================================
@@ -106,12 +108,14 @@ writeNginxConfig() {
     local fake_host
     fake_host=$(echo "$fake_url" | sed 's|https://||;s|http://||;s|/.*||')
 
-    # WebBasePath — уже в формате /path/ из xuiGetWebBasePath
+    # xuiGetWebBasePath() возвращает /path/ — убираем обрамляющие слеши,
+    # иначе в конфиге получается location //path// { что nginx не матчит.
     local web_path
     web_path="$xui_web_path"
-    # Убираем слеши для location (nginx location /path/ — уже с ними)
-    # Сохраняем в xpro.conf для справки
-    xpro_conf_set "XUI_WEB_BASE_PATH" "$web_path"
+    web_path="${web_path#/}"; web_path="${web_path%/}"
+    # Если после strip получилась пустая строка — оставляем пустую (location /)
+    [ -z "$web_path" ] && web_path=""
+    xpro_conf_set "XUI_WEB_BASE_PATH" "/${web_path:-}/"
 
     # nginx.conf главный
     cat > /etc/nginx/nginx.conf << 'NGINXMAIN'
@@ -185,7 +189,7 @@ server {
     proxy_cache     off;
 
     # Панель 3x-ui — путь из WebBasePath (скрытый от сканеров)
-    location /${web_path}/ {
+    location /${web_path:-} {
         proxy_pass http://127.0.0.1:${xui_port}/;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -291,7 +295,8 @@ setFakeSite() {
 
     # Обновляем proxy_pass в конфиге если он уже существует
     if [ -f "$NGINX_XPRO_CONF" ]; then
-        sed -i "s|proxy_pass https\?://[^;]*;|proxy_pass ${chosen_url};|" \
+        # Negative lookahead: заменяем только внешние proxy_pass (не 127.0.0.1)
+        sed -i "s|proxy_pass https\?://\(127\.0\.0\.1\)\@!\([^;]*\);|proxy_pass ${chosen_url};|" \
             "$NGINX_XPRO_CONF"
         # Обновляем Host хедер фейкового сайта через python3
         python3 - "$NGINX_XPRO_CONF" "$fake_host" << 'PYEOF' 2>/dev/null || true
@@ -341,6 +346,9 @@ closePort80() {
 configSSL() {
     local domain="${1:-$(xpro_conf_get DOMAIN)}"
     local cdn="${2:-$(xpro_conf_get CDN)}"
+    # Третий аргумент: "1" = Cloudflare DNS API, "2" = standalone HTTP.
+    # Если не задан — спрашиваем интерактивно.
+    local method="${3:-}"
 
     [ -z "$domain" ] && {
         echo "${red}Домен не указан${reset}"
@@ -365,7 +373,12 @@ configSSL() {
     echo "${cyan}Метод получения SSL сертификата:${reset}"
     echo "  ${green}1.${reset} Cloudflare DNS API (рекомендуется, домен не должен резолвиться на этот сервер)"
     echo "  ${green}2.${reset} Standalone HTTP (порт 80 должен быть доступен)"
-    read -rp "  Выбор: " cert_method
+    if [ -z "$method" ]; then
+        read -rp "  Выбор: " cert_method
+    else
+        cert_method="$method"
+        echo "  Выбор (non-interactive): ${cert_method}"
+    fi
 
     mkdir -p "$NGINX_CERT_DIR"
 
@@ -534,7 +547,12 @@ toggleCfGuard() {
         mv -f "$tmp" "${NGINX_CONF_DIR}/cf_guard.conf"
 
         if ! grep -q "cloudflare_ip" "$NGINX_XPRO_CONF" 2>/dev/null; then
-            sed -i '/location \/xui\/ {/a\        if ($cloudflare_ip != 1) { return 444; }' \
+            local guard_path
+            guard_path=$(xuiGetWebBasePath)
+            guard_path="${guard_path#/}"; guard_path="${guard_path%/}"
+            # Если после strip получилась пустая строка — оставляем пустую (location /)
+            [ -z "$guard_path" ] && guard_path=""
+            sed -i "/location \/${guard_path:-} {/a\\        if (\$cloudflare_ip != 1) { return 444; }" \
                 "$NGINX_XPRO_CONF"
         fi
 
