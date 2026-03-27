@@ -359,3 +359,41 @@ generateFreePort() {
         fi
     done
 }
+
+# =================================================================
+# ЗАВИСИМОСТИ ДЛЯ SYNC-INBOUNDS
+# jq и sqlite3 нужны для syncXrayInbounds() в nginx.sh
+# =================================================================
+installSyncDeps() {
+    local missing=0
+    command -v jq      &>/dev/null || { installPackage "jq"      || missing=1; }
+    command -v sqlite3 &>/dev/null || { installPackage "sqlite3" || missing=1; }
+    return $missing
+}
+
+# =================================================================
+# ДИСПЕТЧЕР КОМАНД — точка входа для cron и CLI
+# Вызывается из /usr/local/bin/xpro при передаче аргументов
+#
+# Использование:
+#   xpro sync-inbounds   — синхронизация WS/gRPC из 3x-ui → nginx
+# =================================================================
+dispatchCommand() {
+    local cmd="${1:-}"
+    case "$cmd" in
+        sync-inbounds)
+            # Подгружаем nginx.sh если функция ещё не определена
+            if ! declare -f syncXrayInbounds &>/dev/null; then
+                local lib="${XPRO_LIB}/nginx.sh"
+                [ -f "$lib" ] && source "$lib" || {
+                    echo "${red}Ошибка: nginx.sh не найден в ${XPRO_LIB}${reset}" >&2
+                    exit 1
+                }
+            fi
+            syncXrayInbounds
+            ;;
+        *)
+            return 1  # Неизвестная команда — вернуть управление menu.sh
+            ;;
+    esac
+}

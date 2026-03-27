@@ -341,6 +341,53 @@ xuiApiRestart() {
 }
 
 # =================================================================
+# ПРОСМОТР INBOUND'ОВ (WS / gRPC) — из БД напрямую
+# =================================================================
+xuiShowInbounds() {
+    [ -f "$XUI_DB" ] || {
+        echo "${red}База 3x-ui не найдена (${XUI_DB})${reset}"
+        return 1
+    }
+    command -v sqlite3 &>/dev/null || {
+        echo "${red}sqlite3 не установлен${reset}"
+        return 1
+    }
+    command -v jq &>/dev/null || {
+        echo "${red}jq не установлен${reset}"
+        return 1
+    }
+
+    echo ""
+    echo "${cyan}  WS inbound'ы:${reset}"
+    local ws_found=0
+    while IFS='|' read -r remark port settings; do
+        local path
+        path=$(echo "$settings" | jq -r '.wsSettings.path // "?"' 2>/dev/null)
+        printf "    ${green}%-20s${reset}  порт: %-6s  path: %s\n" "$remark" "$port" "$path"
+        ws_found=1
+    done < <(sqlite3 "$XUI_DB" \
+        "SELECT remark, port, stream_settings FROM inbounds
+         WHERE protocol IN ('vless','vmess','trojan')
+         AND stream_settings LIKE '%\"network\":\"ws\"%';")
+    [ "$ws_found" -eq 0 ] && echo "    нет"
+
+    echo ""
+    echo "${cyan}  gRPC inbound'ы:${reset}"
+    local grpc_found=0
+    while IFS='|' read -r remark port settings; do
+        local service
+        service=$(echo "$settings" | jq -r '.grpcSettings.serviceName // "?"' 2>/dev/null)
+        printf "    ${green}%-20s${reset}  порт: %-6s  service: %s\n" "$remark" "$port" "$service"
+        grpc_found=1
+    done < <(sqlite3 "$XUI_DB" \
+        "SELECT remark, port, stream_settings FROM inbounds
+         WHERE protocol IN ('vless','vmess','trojan')
+         AND stream_settings LIKE '%\"network\":\"grpc\"%';")
+    [ "$grpc_found" -eq 0 ] && echo "    нет"
+    echo ""
+}
+
+# =================================================================
 # МЕНЮ 3x-ui
 # =================================================================
 manage3xuiMenu() {
@@ -378,7 +425,9 @@ manage3xuiMenu() {
         echo "  ${green}4.${reset} Сменить порт панели"
         echo "  ${green}5.${reset} Перезапустить Xray"
         echo "  ${green}6.${reset} Список outbound'ов"
-        echo "  ${red}7.${reset} Удалить 3x-ui"
+        echo "  ${green}7.${reset} Показать WS/gRPC inbound'ы"
+        echo "  ${green}8.${reset} Синхронизировать inbound'ы → Nginx"
+        echo "  ${red}9.${reset} Удалить 3x-ui"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -433,6 +482,20 @@ except:
                 read -r
                 ;;
             7)
+                xuiShowInbounds
+                read -r
+                ;;
+            8)
+                if declare -f syncXrayInbounds &>/dev/null; then
+                    syncXrayInbounds
+                else
+                    local lib="${XPRO_LIB}/nginx.sh"
+                    [ -f "$lib" ] && source "$lib" && syncXrayInbounds \
+                        || echo "${red}nginx.sh не найден${reset}"
+                fi
+                read -r
+                ;;
+            9)
                 remove3xui
                 read -r
                 ;;

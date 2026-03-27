@@ -162,7 +162,7 @@ DEFAULTCONF
     # Основной конфиг домена
     cat > "$NGINX_XPRO_CONF" << EOF
 server {
-    listen 443 ssl;
+    listen 443 ssl http2;
     server_name ${domain};
 
     ssl_certificate     ${NGINX_CERT_DIR}/cert.pem;
@@ -176,7 +176,7 @@ server {
     proxy_cache     off;
 
     # Панель 3x-ui — путь из WebBasePath (скрытый от сканеров)
-    location = /${web_path:-} {
+    location /${web_path:-}/ {
         proxy_pass http://127.0.0.1:${xui_port};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -198,17 +198,8 @@ server {
         proxy_hide_header Server;
     }
 
-    # WebSocket подключения Xray — настраивай под каждый inbound:
-    # location /your-ws-path/ {
-    #     proxy_pass http://127.0.0.1:10000;
-    #     proxy_http_version 1.1;
-    #     proxy_set_header Upgrade \$http_upgrade;
-    #     proxy_set_header Connection "upgrade";
-    #     proxy_set_header Host \$host;
-    #     proxy_read_timeout 3600s;
-    #     proxy_send_timeout 3600s;
-    #     proxy_socket_keepalive on;
-    # }
+    # xpro-sync-zone-begin (auto-managed, do not edit manually)
+    # xpro-sync-zone-end
 
     # Фейковый сайт — всё остальное
     location / {
@@ -580,16 +571,142 @@ getCfGuardStatus() {
 }
 
 # =================================================================
+# АВТО-СИНХРОНИЗАЦИЯ WS / gRPC INBOUND'ОВ ИЗ 3X-UI
+# =================================================================
+syncXrayInbounds() {
+    local xui_db="/etc/x-ui/x-ui.db"
+    local domain
+    domain=$(xpro_conf_get "DOMAIN")
+
+    [ -f "$xui_db" ] || {
+        echo "${red}Ошибка: База 3x-ui не найдена (${xui_db})${reset}"
+        return 1
+    }
+    command -v jq     &>/dev/null || { echo "${red}Ошибка: jq не установлен${reset}"; return 1; }
+    command -v sqlite3 &>/dev/null || { echo "${red}Ошибка: sqlite3 не установлен${reset}"; return 1; }
+    [ -f "$NGINX_XPRO_CONF" ] || {
+        echo "${red}Ошибка: ${NGINX_XPRO_CONF} не найден${reset}"
+        return 1
+    }
+
+    local tmp_blocks
+    tmp_blocks=$(mktemp)
+    trap 'rm -f "$tmp_blocks"' RETURN
+
+    local ws_count=0 grpc_count=0
+
+    # ── WebSocket inbound'ы ──────────────────────────────────────
+    while IFS='|' read -r port settings; do
+        local path
+        path=$(echo "$settings" | jq -r '.wsSettings.path // empty' 2>/dev/null)
+        [ -z "$path" ] && continue
+
+        cat >> "$tmp_blocks" << EOF
+    # xpro-sync: ws ${port} ${path}
+    location ${path} {
+        proxy_pass             http://127.0.0.1:${port};
+        proxy_http_version     1.1;
+        proxy_set_header       Upgrade    \$http_upgrade;
+        proxy_set_header       Connection "upgrade";
+        proxy_set_header       Host       \$host;
+        proxy_read_timeout     3600s;
+        proxy_send_timeout     3600s;
+        proxy_socket_keepalive on;
+        access_log             off;
+        error_log              /dev/null crit;
+    }
+    # xpro-sync-end
+
+EOF
+        ws_count=$((ws_count + 1))
+    done < <(sqlite3 "$xui_db" \
+        "SELECT port, stream_settings FROM inbounds
+         WHERE protocol IN ('vless','vmess','trojan')
+         AND stream_settings LIKE '%\"network\":\"ws\"%';")
+
+    # ── gRPC inbound'ы ───────────────────────────────────────────
+    while IFS='|' read -r port settings; do
+        local service
+        service=$(echo "$settings" | jq -r '.grpcSettings.serviceName // empty' 2>/dev/null)
+        [ -z "$service" ] && continue
+
+        cat >> "$tmp_blocks" << EOF
+    # xpro-sync: grpc ${port} ${service}
+    location /${service} {
+        grpc_pass            grpc://127.0.0.1:${port};
+        grpc_read_timeout    1h;
+        grpc_send_timeout    1h;
+        client_max_body_size 0;
+        access_log           off;
+        error_log            /dev/null crit;
+    }
+    # xpro-sync-end
+
+EOF
+        grpc_count=$((grpc_count + 1))
+    done < <(sqlite3 "$xui_db" \
+        "SELECT port, stream_settings FROM inbounds
+         WHERE protocol IN ('vless','vmess','trojan')
+         AND stream_settings LIKE '%\"network\":\"grpc\"%';")
+
+    # ── Инжектируем блоки в xpro.conf через Python ───────────────
+    python3 - "$NGINX_XPRO_CONF" "$tmp_blocks" << 'PYEOF'
+import sys, re
+
+conf_path = sys.argv[1]
+blocks_path = sys.argv[2]
+
+with open(conf_path) as f:
+    content = f.read()
+
+with open(blocks_path) as f:
+    new_blocks = f.read()
+
+# Удаляем все старые xpro-sync блоки внутри зоны
+content = re.sub(
+    r'(# xpro-sync-zone-begin[^\n]*\n).*?(    # xpro-sync-zone-end)',
+    r'\1' + new_blocks + r'\2',
+    content,
+    flags=re.DOTALL
+)
+
+with open(conf_path, 'w') as f:
+    f.write(content)
+PYEOF
+
+    _nginx_reload
+    echo "${green}Синхронизировано: ${ws_count} WS, ${grpc_count} gRPC инбаундов${reset}"
+}
+
+_syncXrayInboundsStatus() {
+    [ -f "$NGINX_XPRO_CONF" ] || { echo "—"; return; }
+    local ws grpc
+    ws=$(grep -c '# xpro-sync: ws'   "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    grpc=$(grep -c '# xpro-sync: grpc' "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    echo "${ws} WS, ${grpc} gRPC"
+}
+
+setupSyncCron() {
+    cat > /etc/cron.d/xpro-sync-inbounds << 'EOF'
+# Авто-синхронизация WS/gRPC inbound'ов из 3x-ui каждые 5 минут
+*/5 * * * * root /usr/local/bin/xpro sync-inbounds 2>/dev/null
+EOF
+    chmod 644 /etc/cron.d/xpro-sync-inbounds
+    echo "${green}Cron синхронизации inbound'ов настроен (каждые 5 минут)${reset}"
+}
+
+# =================================================================
 # МЕНЮ NGINX
 # =================================================================
 nginxMenu() {
     while true; do
         clear
-        local nginx_status cert_expiry cf_guard fake_url
+        local nginx_status cert_expiry cf_guard fake_url inbounds_status
         nginx_status=$(getServiceStatus nginx)
         cert_expiry=$(checkCertExpiry)
         cf_guard=$(getCfGuardStatus)
         fake_url=$(xpro_conf_get "FAKE_SITE_URL" 2>/dev/null || echo "не задан")
+        inbounds_status=$(_syncXrayInboundsStatus)
 
         echo ""
         echo "${cyan}══════════════════════════════════════${reset}"
@@ -600,6 +717,7 @@ nginxMenu() {
         echo "  SSL:        $cert_expiry"
         echo "  CF Guard:   $cf_guard"
         echo "  Fake site:  $fake_url"
+        echo "  Inbounds:   $inbounds_status"
         echo ""
         echo "  ${green}1.${reset} Сменить фейковый сайт"
         echo "  ${green}2.${reset} Обновить SSL сертификат"
@@ -607,6 +725,8 @@ nginxMenu() {
         echo "  ${green}4.${reset} Включить/Выключить CF Guard"
         echo "  ${green}5.${reset} Обновить CF IP диапазоны"
         echo "  ${green}6.${reset} Перезапустить Nginx"
+        echo "  ${green}7.${reset} Синхронизировать WS/gRPC inbound'ы"
+        echo "  ${green}8.${reset} Настроить авто-синхронизацию (cron)"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -621,6 +741,8 @@ nginxMenu() {
                 _nginx_reload && echo "${green}Nginx перезапущен${reset}"
                 read -r
                 ;;
+            7) syncXrayInbounds; read -r ;;
+            8) setupSyncCron; read -r ;;
             0) return 0 ;;
             *) ;;
         esac

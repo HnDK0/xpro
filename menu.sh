@@ -178,6 +178,10 @@ handle_cli() {
             _load_modules
             checkPsiphonIP
             ;;
+        sync-inbounds)
+            _load_modules
+            syncXrayInbounds
+            ;;
         status)
             _load_modules
             show_status
@@ -194,7 +198,7 @@ handle_cli() {
             ;;
         *)
             echo "Неизвестная команда: $cmd"
-            echo "Доступные: update-cf-ips, check-warp, check-tor, check-psiphon, status, uninstall"
+            echo "Доступные: update-cf-ips, check-warp, check-tor, check-psiphon, sync-inbounds, status, uninstall"
             exit 1
             ;;
     esac
@@ -264,6 +268,7 @@ _uninstall_xpro() {
 
     # Cron
     rm -f /etc/cron.d/xpro-cf-ips
+    rm -f /etc/cron.d/xpro-sync-inbounds
 
     # Конфиг и модули xpro
     rm -f /usr/local/bin/xpro
