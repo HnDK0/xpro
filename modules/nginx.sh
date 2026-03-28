@@ -628,13 +628,15 @@ syncXrayInbounds() {
             cat >> "$tmp_blocks" << EOF
     # xpro-sync: ws ${port} ${ws_path}
     location ${ws_path} {
+        if (\$http_upgrade != "websocket") { return 404; }
         proxy_pass             http://127.0.0.1:${port};
         proxy_http_version     1.1;
         proxy_set_header       Upgrade    \$http_upgrade;
         proxy_set_header       Connection "upgrade";
         proxy_set_header       Host       \$host;
-        proxy_read_timeout     3600s;
-        proxy_send_timeout     3600s;
+        proxy_buffering        off;
+        proxy_read_timeout     604800s;
+        proxy_send_timeout     604800s;
         proxy_socket_keepalive on;
         access_log             off;
         error_log              /dev/null crit;
@@ -652,12 +654,16 @@ EOF
             cat >> "$tmp_blocks" << EOF
     # xpro-sync: grpc ${port} ${grpc_service}
     location /${grpc_service} {
-        grpc_pass            grpc://127.0.0.1:${port};
-        grpc_read_timeout    1h;
-        grpc_send_timeout    1h;
-        client_max_body_size 0;
-        access_log           off;
-        error_log            /dev/null crit;
+        if (\$request_method != "POST") { return 404; }
+        client_max_body_size    0;
+        proxy_buffering         off;
+        proxy_request_buffering off;
+        grpc_read_timeout       604800s;
+        grpc_send_timeout       604800s;
+        grpc_socket_keepalive   on;
+        grpc_pass               grpc://127.0.0.1:${port};
+        access_log              off;
+        error_log               /dev/null crit;
     }
     # xpro-sync-end
 
@@ -673,14 +679,14 @@ EOF
     location ${xhttp_path} {
         proxy_pass              http://127.0.0.1:${port};
         proxy_http_version      1.1;
-        proxy_set_header        Host            \$host;
-        proxy_set_header        X-Real-IP       \$remote_addr;
-        proxy_set_header        X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout      3600s;
-        proxy_send_timeout      3600s;
-        proxy_socket_keepalive  on;
         proxy_buffering         off;
         proxy_request_buffering off;
+        proxy_set_header        Host \$host;
+        keepalive_timeout       168h;
+        proxy_read_timeout      168h;
+        proxy_send_timeout      168h;
+        proxy_socket_keepalive  on;
+        client_max_body_size    0;
         access_log              off;
         error_log               /dev/null crit;
     }
