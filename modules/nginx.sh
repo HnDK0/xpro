@@ -594,8 +594,8 @@ syncXrayInbounds() {
         echo "${red}Ошибка: База 3x-ui не найдена (${xui_db})${reset}"
         return 1
     }
-    command -v jq     &>/dev/null || { echo "${red}Ошибка: jq не установлен${reset}"; return 1; }
-    command -v sqlite3 &>/dev/null || { echo "${red}Ошибка: sqlite3 не установлен${reset}"; return 1; }
+    # Устанавливаем зависимости автоматически если нужно
+    installSyncDeps || return 1
     [ -f "$NGINX_XPRO_CONF" ] || {
         echo "${red}Ошибка: ${NGINX_XPRO_CONF} не найден${reset}"
         return 1
@@ -702,8 +702,19 @@ EOF
 
     # Нормализуем — убираем trailing slash
     sub_port="${sub_port:-2096}"
-    sub_path="${sub_path:-/sub}"; sub_path="${sub_path%/}"
-    sub_json_path="${sub_json_path:-/sub/json}"; sub_json_path="${sub_json_path%/}"
+    # Нормализуем: убеждаемся что путь начинается со slash и заканчивается slash
+    sub_path="${sub_path:-/sub/}"
+    sub_path="/${sub_path#/}"          # гарантируем leading slash
+    [[ "$sub_path" != */ ]] && sub_path="${sub_path}/"  # гарантируем trailing slash
+    # json путь: /path/json/
+    sub_json_path="${sub_json_path:-}"
+    if [ -z "$sub_json_path" ]; then
+        # Строим из sub_path: /path/ -> /path/json/
+        sub_json_path="${sub_path%/}/json/"
+    else
+        sub_json_path="/${sub_json_path#/}"
+        [[ "$sub_json_path" != */ ]] && sub_json_path="${sub_json_path}/"
+    fi
 
     if [ "${sub_enabled:-0}" = "1" ]; then
         cat >> "$tmp_blocks" << EOF
@@ -736,7 +747,7 @@ EOF
 EOF
         sub_count=1
         # Обновляем xpro.conf актуальным путём из БД
-        xpro_conf_set "XUI_SUB_PATH" "$sub_path"
+        xpro_conf_set "XUI_SUB_PATH" "$sub_path"  # сохраняем с trailing slash
     fi
 
     # ── Инжектируем блоки в xpro.conf через Python ───────────────
@@ -752,7 +763,24 @@ with open(conf_path) as f:
 with open(blocks_path) as f:
     new_blocks = f.read()
 
-# Удаляем все старые xpro-sync блоки внутри зоны
+# Fallback: если маркеры пропали (ручное редактирование конфига) — восстанавливаем
+# Вставляем перед первым "location /" — блоком фейкового сайта
+if "# xpro-sync-zone-begin" not in content:
+    content = re.sub(
+        r"(    # Фейковый сайт[^\n]*\n    location / \{)",
+        "    # xpro-sync-zone-begin\n    # xpro-sync-zone-end\n\n    \\1",
+        content
+    )
+    # Если комментарий не найден — ищем просто "location / {"
+    if "# xpro-sync-zone-begin" not in content:
+        content = re.sub(
+            r"(    location / \{)",
+            "    # xpro-sync-zone-begin\n    # xpro-sync-zone-end\n\n    \\1",
+            content,
+            count=1
+        )
+
+# Заменяем содержимое зоны
 content = re.sub(
     r'(# xpro-sync-zone-begin[^\n]*\n).*?(    # xpro-sync-zone-end)',
     r'\1' + new_blocks + r'\2',
@@ -817,8 +845,7 @@ nginxMenu() {
         echo "  ${green}4.${reset} Включить/Выключить CF Guard"
         echo "  ${green}5.${reset} Обновить CF IP диапазоны"
         echo "  ${green}6.${reset} Перезапустить Nginx"
-        echo "  ${green}7.${reset} Синхронизировать WS/gRPC inbound'ы"
-        echo "  ${green}8.${reset} Настроить авто-синхронизацию (cron)"
+        echo "  ${green}7.${reset} Синхронизировать WS/gRPC/xHTTP/sub inbound'ы"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -834,7 +861,6 @@ nginxMenu() {
                 read -r
                 ;;
             7) syncXrayInbounds; read -r ;;
-            8) setupSyncCron; read -r ;;
             0) return 0 ;;
             *) ;;
         esac

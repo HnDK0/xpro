@@ -108,7 +108,7 @@ show_status() {
         "$(date +'%d.%m.%Y %H:%M')" "$flag" "$server_ip"
     echo "${cyan}================================================================${reset}"
     printf "  %-9s%b  ${cyan}%s${reset}\n" "3x-ui:" "$xui_status" "$panel_url"
-    printf "  %-9s${green}%s${reset} / ${green}%s${reset}\n" "Доступ:" "$xui_user" "$xui_pass"
+    printf "  %-10s${green}%s${reset} / ${green}%s${reset}\n" "Доступ:  " "$xui_user" "$xui_pass"
     printf "  %-9s%b  SSL: %b\n"           "Nginx:"  "$nginx_status" "$cert_expiry"
     printf "  %-9s${green}port %s${reset}\n" "SSH:" "$ssh_port"
     printf "${cyan}----------------------------------------------------------------${reset}\n"

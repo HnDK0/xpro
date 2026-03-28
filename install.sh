@@ -426,6 +426,13 @@ main() {
         _ok "Nginx конфиг обновлён"
     fi
 
+    # Перезапускаем x-ui после того как nginx поднялся — иначе первые запросы
+    # могут дать 502 если 3x-ui ещё не успел занять порт
+    _step "Перезапуск 3x-ui (синхронизация с nginx)"
+    systemctl restart x-ui 2>/dev/null || true
+    sleep 3
+    _ok "3x-ui перезапущен"
+
     # =============================================================
     # ШАГ 6 — Cloudflare Real IP
     # =============================================================
@@ -451,8 +458,6 @@ main() {
             installWarp || _fail "Не удалось установить WARP"
             configWarp || _fail "Не удалось настроить WARP"
             sleep 3
-            addWarpOutbound || \
-                _yellow "warn: Outbound WARP — добавь вручную: xpro → WARP → Добавить outbound"
             xpro_conf_set "WARP_INSTALLED" "yes"
             _ok "WARP установлен (socks5://127.0.0.1:40000)"
         fi
@@ -475,8 +480,6 @@ main() {
             startTor || _fail "Tor не запустился"
             enableTor
             sleep 3
-            addTorOutbound || \
-                _yellow "warn: Outbound Tor — добавь вручную: xpro → Tor → Добавить outbound"
             xpro_conf_set "TOR_INSTALLED" "yes"
             _ok "Tor установлен (socks5://127.0.0.1:40003)"
         fi
@@ -500,14 +503,21 @@ main() {
             startPsiphon || _fail "Psiphon не запустился"
             enablePsiphon
             sleep 5
-            addPsiphonOutbound || \
-                _yellow "warn: Outbound Psiphon — добавь вручную: xpro → Psiphon → Добавить outbound"
             xpro_conf_set "PSIPHON_INSTALLED" "yes"
             _ok "Psiphon установлен (socks5://127.0.0.1:40002)"
         fi
     else
         xpro_conf_set "PSIPHON_INSTALLED" "no"
     fi
+
+    # =============================================================
+    # ШАГ 9б — Outbound'ы Xray (warp/tor/psiphon)
+    # Всегда записываем все три — неиспользуемые outbound'ы без routing rules
+    # не влияют на трафик. Routing настраивается в панели 3x-ui вручную.
+    # =============================================================
+    _step "Запись outbound'ов Xray"
+    xuiDbWriteOutbounds || _yellow "warn: Не удалось записать outbound'ы — сделай вручную: xpro → 3x-ui → Пересоздать outbound'ы Xray"
+    _ok "Outbound'ы warp/tor/psiphon записаны"
 
     # =============================================================
     # ШАГ 10 — BBR
@@ -543,17 +553,6 @@ main() {
     else
         setupLogrotate
         _ok "Logrotate настроен"
-    fi
-
-    # =============================================================
-    # ШАГ 12б — Cron авто-синхронизации WS/gRPC/sub inbound'ов
-    # =============================================================
-    _step "Настройка авто-синхронизации inbound'ов"
-    if [ -f /etc/cron.d/xpro-sync-inbounds ]; then
-        _ok "Cron синхронизации уже настроен — пропускаем"
-    else
-        setupSyncCron
-        _ok "Cron синхронизации настроен (каждые 5 минут)"
     fi
 
     # =============================================================

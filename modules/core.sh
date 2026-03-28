@@ -367,6 +367,7 @@ generateFreePort() {
 # =================================================================
 installSyncDeps() {
     command -v sqlite3 &>/dev/null || { installPackage "sqlite3" || return 1; }
+    command -v jq     &>/dev/null || { installPackage "jq"      || return 1; }
     return 0
 }
 

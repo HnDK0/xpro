@@ -183,24 +183,9 @@ removeWarp() {
     rm -f /usr/share/keyrings/cloudflare-warp.gpg
     systemctl daemon-reload
 
-    # Удаляем outbound из 3x-ui
-    xuiDbDelOutbound "warp" 2>/dev/null || true
-
     xpro_conf_set "WARP_INSTALLED" "no"
-    xpro_conf_del "OUTBOUND_WARP_ADDED"
 
     echo "${green}WARP удалён${reset}"
-}
-
-# =================================================================
-# OUTBOUND'Ы В 3x-ui (через БД)
-# =================================================================
-addWarpOutbound() {
-    xuiDbAddOutbound "warp" "127.0.0.1" "$WARP_PORT"
-}
-
-removeWarpOutbound() {
-    xuiDbDelOutbound "warp"
 }
 
 # =================================================================
@@ -217,12 +202,9 @@ checkWarpIP() {
 warpMenu() {
     while true; do
         clear
-        local status autostart outbound_status
+        local status autostart
         status=$(getWarpStatus)
         autostart=$(getWarpAutostart)
-        outbound_status="${red}нет${reset}"
-        [ "$(xpro_conf_get OUTBOUND_WARP_ADDED)" = "yes" ] && \
-            outbound_status="${green}добавлен${reset}"
 
         echo ""
         echo "${cyan}══════════════════════════════════════${reset}"
@@ -231,7 +213,6 @@ warpMenu() {
         echo ""
         echo "  Статус:      $status"
         echo "  Автозагрузка: $autostart"
-        echo "  Outbound:    $outbound_status"
         echo "  Порт:        socks5://127.0.0.1:${WARP_PORT}"
         echo ""
 
@@ -256,10 +237,8 @@ warpMenu() {
             fi
         fi
 
-        echo "  ${green}3.${reset} Добавить outbound в 3x-ui"
-        echo "  ${green}4.${reset} Удалить outbound из 3x-ui"
-        echo "  ${green}5.${reset} Проверить IP"
-        echo "  ${red}6.${reset} Удалить WARP"
+        echo "  ${green}3.${reset} Проверить IP"
+        echo "  ${red}4.${reset} Удалить WARP"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -292,10 +271,8 @@ warpMenu() {
                 fi
                 sleep 1
                 ;;
-            3) addWarpOutbound; read -r ;;
-            4) removeWarpOutbound; read -r ;;
-            5) checkWarpIP; read -r ;;
-            6) removeWarp; read -r ;;
+            3) checkWarpIP; read -r ;;
+            4) removeWarp; read -r ;;
             0) return 0 ;;
             *) ;;
         esac

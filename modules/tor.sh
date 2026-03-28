@@ -431,11 +431,7 @@ removeTor() {
     rm -f /usr/local/etc/xpro/tor_bridges.txt
     systemctl daemon-reload
 
-    # Удаляем outbound из 3x-ui
-    xuiDbDelOutbound "tor" 2>/dev/null || true
-
     xpro_conf_set "TOR_INSTALLED" "no"
-    xpro_conf_del "OUTBOUND_TOR_ADDED"
 
     echo "${green}Tor удалён${reset}"
 }
@@ -601,17 +597,6 @@ configureTorBridges() {
 }
 
 # =================================================================
-# OUTBOUND'Ы В 3x-ui (через БД)
-# =================================================================
-addTorOutbound() {
-    xuiDbAddOutbound "tor" "127.0.0.1" "$TOR_PORT"
-}
-
-removeTorOutbound() {
-    xuiDbDelOutbound "tor"
-}
-
-# =================================================================
 # ПРОВЕРКА IP
 # =================================================================
 checkTorIP() {
@@ -626,15 +611,12 @@ checkTorIP() {
 torMenu() {
     while true; do
         clear
-        local status autostart outbound_status country bridge_type
+        local status autostart country bridge_type
         status=$(getTorStatus)
         autostart=$(getTorAutostart)
         country=$(getTorCountry)
         [ -z "$country" ] && country="random"
         bridge_type=$(getTorBridgeType)
-        outbound_status="${red}нет${reset}"
-        [ "$(xpro_conf_get OUTBOUND_TOR_ADDED)" = "yes" ] && \
-            outbound_status="${green}добавлен${reset}"
 
         echo ""
         echo "${cyan}══════════════════════════════════════${reset}"
@@ -645,7 +627,6 @@ torMenu() {
         echo "  Автозагрузка: $autostart"
         echo "  Страна:      $country"
         echo "  Мосты:       $bridge_type"
-        echo "  Outbound:    $outbound_status"
         echo "  Порт:        socks5://127.0.0.1:${TOR_PORT}"
         echo ""
 
@@ -673,10 +654,8 @@ torMenu() {
             echo "  ${green}5.${reset} Обновить Tor"
         fi
 
-        echo "  ${green}6.${reset} Добавить outbound в 3x-ui"
-        echo "  ${green}7.${reset} Удалить outbound из 3x-ui"
-        echo "  ${green}8.${reset} Проверить IP"
-        echo "  ${red}9.${reset} Удалить Tor"
+        echo "  ${green}6.${reset} Проверить IP"
+        echo "  ${red}7.${reset} Удалить Tor"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -713,10 +692,8 @@ torMenu() {
                 ! command -v tor &>/dev/null && { echo "${red}Tor не установлен${reset}"; sleep 1; continue; }
                 upgradeTor; read -r
                 ;;
-            6) addTorOutbound; read -r ;;
-            7) removeTorOutbound; read -r ;;
-            8) checkTorIP; read -r ;;
-            9) removeTor; read -r ;;
+            6) checkTorIP; read -r ;;
+            7) removeTor; read -r ;;
             0) return 0 ;;
             *) ;;
         esac

@@ -270,11 +270,7 @@ removePsiphon() {
     rm -rf "$PSIPHON_DATA_DIR"
     systemctl daemon-reload
 
-    # Удаляем outbound из 3x-ui
-    xuiDbDelOutbound "psiphon" 2>/dev/null || true
-
     xpro_conf_set "PSIPHON_INSTALLED" "no"
-    xpro_conf_del "OUTBOUND_PSIPHON_ADDED"
     xpro_conf_del "PSIPHON_MODE"
 
     echo "${green}Psiphon удалён${reset}"
@@ -362,17 +358,6 @@ setPsiphonMode() {
 }
 
 # =================================================================
-# OUTBOUND'Ы В 3x-ui (через БД)
-# =================================================================
-addPsiphonOutbound() {
-    xuiDbAddOutbound "psiphon" "127.0.0.1" "$PSIPHON_PORT"
-}
-
-removePsiphonOutbound() {
-    xuiDbDelOutbound "psiphon"
-}
-
-# =================================================================
 # ПРОВЕРКА IP — с фалбеками
 # =================================================================
 checkPsiphonIP() {
@@ -387,14 +372,11 @@ checkPsiphonIP() {
 psiphonMenu() {
     while true; do
         clear
-        local status autostart mode country outbound_status
+        local status autostart mode country
         status=$(getPsiphonStatus)
         autostart=$(getPsiphonAutostart)
         mode=$(getPsiphonMode)
         country=$(getPsiphonCountry)
-        outbound_status="${red}нет${reset}"
-        [ "$(xpro_conf_get OUTBOUND_PSIPHON_ADDED)" = "yes" ] && \
-            outbound_status="${green}добавлен${reset}"
 
         echo ""
         echo "${cyan}══════════════════════════════════════${reset}"
@@ -405,7 +387,6 @@ psiphonMenu() {
         echo "  Автозагрузка: $autostart"
         echo "  Страна:      $country"
         echo "  Режим:       $mode"
-        echo "  Outbound:    $outbound_status"
         echo "  Порт:        socks5://127.0.0.1:${PSIPHON_PORT}"
         echo ""
 
@@ -432,10 +413,8 @@ psiphonMenu() {
             echo "  ${green}4.${reset} Сменить режим (plain / WARP+Psiphon)"
         fi
 
-        echo "  ${green}5.${reset} Добавить outbound в 3x-ui"
-        echo "  ${green}6.${reset} Удалить outbound из 3x-ui"
-        echo "  ${green}7.${reset} Проверить IP"
-        echo "  ${red}8.${reset} Удалить Psiphon"
+        echo "  ${green}5.${reset} Проверить IP"
+        echo "  ${red}6.${reset} Удалить Psiphon"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -472,10 +451,8 @@ psiphonMenu() {
                 [ ! -f "$PSIPHON_BIN" ] && { echo "${red}Psiphon не установлен${reset}"; sleep 1; continue; }
                 setPsiphonMode; read -r
                 ;;
-            5) addPsiphonOutbound; read -r ;;
-            6) removePsiphonOutbound; read -r ;;
-            7) checkPsiphonIP; read -r ;;
-            8) removePsiphon; read -r ;;
+            5) checkPsiphonIP; read -r ;;
+            6) removePsiphon; read -r ;;
             0) return 0 ;;
             *) ;;
         esac

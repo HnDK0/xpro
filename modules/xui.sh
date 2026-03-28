@@ -172,73 +172,12 @@ xuiWaitForDB() {
 # БД ФУНКЦИИ — прямая модификация sqlite БД 3x-ui
 # =================================================================
 
-# Добавить outbound (SOCKS5) в xrayTemplateConfig
-xuiDbAddOutbound() {
-    local tag="$1"       # warp | tor | psiphon
-    local address="$2"   # 127.0.0.1
-    local port="$3"      # 40000 | 40003 | 40002
-
-    echo "${cyan}Добавляем outbound '${tag}' через БД...${reset}"
-
-    [ -f "$XUI_DB" ] || {
-        echo "${red}Ошибка: База 3x-ui не найдена (${XUI_DB})${reset}"
-        return 1
-    }
-
-    python3 << EOF
-import sqlite3, json
-
-db = sqlite3.connect('${XUI_DB}')
-cur = db.cursor()
-
-# Получаем текущий xrayTemplateConfig
-cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'")
-row = cur.fetchone()
-config = json.loads(row[0]) if row else {}
-
-# Новый outbound
-new_outbound = {
-    "tag": "${tag}",
-    "protocol": "socks",
-    "settings": {
-        "servers": [{
-            "address": "${address}",
-            "port": ${port}
-        }]
-    }
-}
-
-# Добавляем если не существует
-existing = config.get('outbounds', [])
-existing_tags = [o.get('tag') for o in existing]
-
-if '${tag}' not in existing_tags:
-    existing.append(new_outbound)
-    config['outbounds'] = existing
-    
-    # Записываем обратно
-    cur.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', ?)",
-        (json.dumps(config, indent=2),)
-    )
-    db.commit()
-    print("Outbound '${tag}' добавлен")
-else:
-    print("Outbound '${tag}' уже существует")
-
-db.close()
-EOF
-
-    # Перезапускаем x-ui для применения изменений
-    x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
-    echo "${green}Outbound '${tag}' добавлен${reset}"
-}
-
-# Удалить outbound из xrayTemplateConfig
-xuiDbDelOutbound() {
-    local tag="$1"
-
-    echo "${cyan}Удаляем outbound '${tag}' через БД...${reset}"
+# Записать все три outbound'а (warp/tor/psiphon) в xrayTemplateConfig.
+# Читаем полный текущий конфиг, удаляем только наши теги,
+# добавляем все три заново, пишем полный объект обратно.
+# Остальные поля (dns, routing, policy, log и т.д.) не трогаем.
+xuiDbWriteOutbounds() {
+    echo "${cyan}Записываем outbound'ы warp/tor/psiphon в xrayTemplateConfig...${reset}"
 
     [ -f "$XUI_DB" ] || {
         echo "${red}Ошибка: База 3x-ui не найдена (${XUI_DB})${reset}"
@@ -246,41 +185,62 @@ xuiDbDelOutbound() {
     }
 
     python3 << EOF
-import sqlite3, json
+import sqlite3, json, sys
 
 db = sqlite3.connect('${XUI_DB}')
 cur = db.cursor()
 
-# Получаем текущий xrayTemplateConfig
+# Читаем полный текущий шаблон
 cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'")
 row = cur.fetchone()
 if not row:
-    print("xrayTemplateConfig не найден")
+    print("Ошибка: xrayTemplateConfig не найден в БД")
     db.close()
-    exit(0)
+    sys.exit(1)
 
 config = json.loads(row[0])
-existing = config.get('outbounds', [])
 
-# Удаляем по tag
-new_outbounds = [o for o in existing if o.get('tag') != '${tag}']
+# Удаляем только наши теги — всё остальное (direct, block и т.д.) не трогаем
+our_tags = {'warp', 'tor', 'psiphon'}
+clean = [o for o in config.get('outbounds', []) if o.get('tag') not in our_tags]
 
-if len(new_outbounds) < len(existing):
-    config['outbounds'] = new_outbounds
-    cur.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', ?)",
-        (json.dumps(config, indent=2),)
-    )
-    db.commit()
-    print("Outbound '${tag}' удалён")
-else:
-    print("Outbound '${tag}' не найден")
+# Добавляем все три всегда — неиспользуемые outbound'ы без routing rules не влияют на трафик
+clean += [
+    {
+        "tag": "warp",
+        "protocol": "socks",
+        "settings": {"servers": [{"address": "127.0.0.1", "port": ${WARP_PORT:-40000}}]}
+    },
+    {
+        "tag": "tor",
+        "protocol": "socks",
+        "settings": {"servers": [{"address": "127.0.0.1", "port": ${TOR_PORT:-40003}}]}
+    },
+    {
+        "tag": "psiphon",
+        "protocol": "socks",
+        "settings": {"servers": [{"address": "127.0.0.1", "port": ${PSIPHON_PORT:-40002}}]}
+    }
+]
 
+config['outbounds'] = clean
+
+# Пишем полный объект обратно
+cur.execute(
+    "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', ?)",
+    (json.dumps(config, indent=2),)
+)
+db.commit()
 db.close()
+print("Outbound'ы warp/tor/psiphon записаны")
 EOF
 
+    local rc=$?
+    [ $rc -ne 0 ] && { echo "${red}Ошибка при записи outbound'ов${reset}"; return 1; }
+
     x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
-    echo "${green}Outbound '${tag}' удалён${reset}"
+    sleep 2
+    echo "${green}Outbound'ы записаны. Routing настраивается в панели 3x-ui.${reset}"
 }
 
 # =================================================================
@@ -324,14 +284,24 @@ xuiDbSetSubSettings() {
         ('webCertFile','webKeyFile','subCertFile','subKeyFile');" 2>/dev/null || true
 
     x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
+    sleep 2
 
-    # Сохраняем в xpro.conf без trailing slash — syncXrayInbounds тоже пишет без
-    xpro_conf_set "XUI_SUB_PATH" "/${sub_path}"
+    # Сохраняем в xpro.conf с trailing slash
+    xpro_conf_set "XUI_SUB_PATH" "/${sub_path}/"
 
     echo "${green}Подписка настроена:${reset}"
     echo "${green}  Домен: ${domain}${reset}"
-    echo "${green}  Путь: /${sub_path}${reset}"
+    echo "${green}  Путь: /${sub_path}/${reset}"
     echo "${green}  Порт: ${sub_port}${reset}"
+
+    # Синхронизируем nginx сразу — чтобы новый путь подписки сразу работал
+    if declare -f syncXrayInbounds &>/dev/null; then
+        echo "${cyan}Синхронизируем nginx...${reset}"
+        syncXrayInbounds
+    elif [ -f "${XPRO_LIB}/nginx.sh" ]; then
+        source "${XPRO_LIB}/nginx.sh"
+        syncXrayInbounds
+    fi
 }
 
 # Получить текущие настройки подписки
@@ -485,7 +455,8 @@ manage3xuiMenu() {
         echo "  ${green}7.${reset} Настроить подписку"
         echo "  ${green}8.${reset} Показать настройки подписки"
         echo "  ${green}9.${reset} Отключить встроенный SSL панели"
-        echo "  ${red}10.${reset} Удалить 3x-ui"
+        echo "  ${green}10.${reset} Пересоздать outbound'ы Xray (warp/tor/psiphon)"
+        echo "  ${red}11.${reset} Удалить 3x-ui"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -550,6 +521,10 @@ manage3xuiMenu() {
                 read -r
                 ;;
             10)
+                xuiDbWriteOutbounds
+                read -r
+                ;;
+            11)
                 remove3xui
                 read -r
                 ;;
