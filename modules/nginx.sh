@@ -10,11 +10,23 @@ CF_KEY_FILE="/root/.cloudflare_api"
 
 # Список фейковых сайтов для proxy_pass
 FAKE_SITES=(
-    "https://natribu.org"
-    "https://thatsthefinger.com"
-    "https://cat-bounce.com"
-    "https://hackertyper.net"
-    "https://theuselessweb.com"
+    "https://www.loremipsum.io"       # Генератор текста
+    "https://www.color-hex.com"       # Цветовые коды
+    "https://www.convert-units.org"   # Конвертер величин
+    "https://www.calculatorsoup.com"  # Калькуляторы
+    "https://www.html.am"             # Уроки HTML
+    "https://www.whois.com"           # Проверка доменов
+    "https://www.json.org"            # Описание JSON
+    "https://www.base64encode.org"    # Кодировщик данных (ИТ-утилита)
+    "https://www.timestampgenerator.com" # Генератор времени (технично)
+    "https://www.diffchecker.com"     # Сравнение текста (инструмент разраба)
+    "https://www.lipsum.com"          # Классический Lorem Ipsum
+    "https://www.regex101.com"        # Проверка регулярок (очень часто на VPS)
+    "https://www.sqlitetutorial.net"  # Уроки по БД (выглядит как шпаргалка админа)
+    "https://www.crontab.guru"        # Справочник по крону (максимально логично для сервера)
+    "https://www.RapidTables.com"     # Таблицы и конвертеры (серый, невзрачный сайт)
+    "https://www.CheckSum.org"        # Проверка хеш-сумм (технический ресурс)
+    "https://www.Explainshell.com"    # Пояснения команд Linux (админская тема)
 )
 
 # =================================================================
