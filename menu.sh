@@ -98,12 +98,17 @@ show_status() {
         psiphon_s="${red}не установлен${reset}"
     fi
 
+    local xui_user xui_pass
+    xui_user=$(xpro_conf_get "XUI_USER" 2>/dev/null || echo "?")
+    xui_pass=$(xpro_conf_get "XUI_PASS" 2>/dev/null || echo "?")
+
     echo ""
     echo "${cyan}================================================================${reset}"
     printf "   ${red}X-UI PRO v${XPRO_VERSION}${reset}  %s  %s %s\n" \
         "$(date +'%d.%m.%Y %H:%M')" "$flag" "$server_ip"
     echo "${cyan}================================================================${reset}"
     printf "  %-9s%b  ${cyan}%s${reset}\n" "3x-ui:" "$xui_status" "$panel_url"
+    printf "  %-9s${green}%s${reset} / ${green}%s${reset}\n" "Доступ:" "$xui_user" "$xui_pass"
     printf "  %-9s%b  SSL: %b\n"           "Nginx:"  "$nginx_status" "$cert_expiry"
     printf "  %-9s${green}port %s${reset}\n" "SSH:" "$ssh_port"
     printf "${cyan}----------------------------------------------------------------${reset}\n"

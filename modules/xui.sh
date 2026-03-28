@@ -47,6 +47,14 @@ install3xui() {
         sleep 2
     fi
 
+    # Убираем встроенный SSL панели — nginx терминирует TLS сам,
+    # proxy_pass http:// сломается если панель слушает на HTTPS
+    echo "${cyan}Отключаем встроенный SSL панели...${reset}"
+    sqlite3 "$XUI_DB" "UPDATE settings SET value='' WHERE key IN \
+        ('webCertFile','webKeyFile','subCertFile','subKeyFile');" 2>/dev/null || true
+    x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
+    sleep 2
+
     echo "${green}3x-ui установлен${reset}"
     [ -n "$xui_port" ] && echo "${green}  Порт: ${xui_port}${reset}"
     [ -n "$xui_path" ] && echo "${green}  Путь: /${xui_path}/${reset}"
@@ -310,6 +318,11 @@ xuiDbSetSubSettings() {
     sqlite3 "$XUI_DB" "INSERT OR REPLACE INTO settings (key, value) VALUES ('subJsonPath', '/${sub_path}/json');"
     sqlite3 "$XUI_DB" "INSERT OR REPLACE INTO settings (key, value) VALUES ('subEnable', '1');"
 
+    # Убираем встроенный SSL — панель и подписка должны слушать HTTP,
+    # TLS терминируется на nginx
+    sqlite3 "$XUI_DB" "UPDATE settings SET value='' WHERE key IN \
+        ('webCertFile','webKeyFile','subCertFile','subKeyFile');" 2>/dev/null || true
+
     x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
 
     # Сохраняем в xpro.conf без trailing slash — syncXrayInbounds тоже пишет без
@@ -419,6 +432,18 @@ xuiShowInbounds() {
 }
 
 # =================================================================
+# ОТКЛЮЧЕНИЕ ВСТРОЕННОГО SSL ПАНЕЛИ
+# nginx терминирует TLS сам — панель должна слушать HTTP
+# =================================================================
+xuiDisablePanelSsl() {
+    [ -f "$XUI_DB" ] || { echo "${red}БД не найдена${reset}"; return 1; }
+    sqlite3 "$XUI_DB" "UPDATE settings SET value='' WHERE key IN \
+        ('webCertFile','webKeyFile','subCertFile','subKeyFile');" 2>/dev/null
+    x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
+    echo "${green}Встроенный SSL панели отключён${reset}"
+}
+
+# =================================================================
 # МЕНЮ 3x-ui
 # =================================================================
 manage3xuiMenu() {
@@ -449,16 +474,18 @@ manage3xuiMenu() {
         echo "  Панель:   $panel_url"
         echo "  Порт:     $port"
         echo "  Логин:    $user"
+        echo "  Пароль:   $(xpro_conf_get XUI_PASS)"
         echo ""
         echo "  ${green}1.${reset} Перезапустить 3x-ui"
         echo "  ${green}2.${reset} Обновить 3x-ui"
         echo "  ${green}3.${reset} Показать credentials"
         echo "  ${green}4.${reset} Сменить порт панели"
-        echo "  ${green}5.${reset} Показать WS/gRPC inbound'ы"
+        echo "  ${green}5.${reset} Показать WS/gRPC/xHTTP inbound'ы"
         echo "  ${green}6.${reset} Синхронизировать inbound'ы → Nginx"
         echo "  ${green}7.${reset} Настроить подписку"
         echo "  ${green}8.${reset} Показать настройки подписки"
-        echo "  ${red}9.${reset} Удалить 3x-ui"
+        echo "  ${green}9.${reset} Отключить встроенный SSL панели"
+        echo "  ${red}10.${reset} Удалить 3x-ui"
         echo "  ${green}0.${reset} Назад"
         echo ""
         read -rp "  Выбор: " choice
@@ -519,6 +546,10 @@ manage3xuiMenu() {
                 read -r
                 ;;
             9)
+                xuiDisablePanelSsl
+                read -r
+                ;;
+            10)
                 remove3xui
                 read -r
                 ;;

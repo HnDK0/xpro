@@ -759,10 +759,10 @@ PYEOF
 _syncXrayInboundsStatus() {
     [ -f "$NGINX_XPRO_CONF" ] || { echo "—"; return; }
     local ws grpc xhttp sub
-    ws=$(grep -c '# xpro-sync: ws'      "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    grpc=$(grep -c '# xpro-sync: grpc'  "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    xhttp=$(grep -c '# xpro-sync: xhttp' "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    sub=$(grep -c '# xpro-sync: sub '   "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    ws=$(grep -c '# xpro-sync: ws'       "$NGINX_XPRO_CONF" 2>/dev/null); ws=${ws:-0}
+    grpc=$(grep -c '# xpro-sync: grpc'   "$NGINX_XPRO_CONF" 2>/dev/null); grpc=${grpc:-0}
+    xhttp=$(grep -c '# xpro-sync: xhttp' "$NGINX_XPRO_CONF" 2>/dev/null); xhttp=${xhttp:-0}
+    sub=$(grep -c '# xpro-sync: sub '    "$NGINX_XPRO_CONF" 2>/dev/null); sub=${sub:-0}
     echo "${ws} WS, ${grpc} gRPC, ${xhttp} xHTTP, ${sub} sub"
 }
 
