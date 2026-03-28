@@ -184,8 +184,7 @@ server {
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 10m;
 
-    proxy_buffering off;
-    proxy_cache     off;
+    proxy_cache off;
 
     # Панель 3x-ui — путь из WebBasePath (скрытый от сканеров)
     location /${web_path:-}/ {
@@ -202,6 +201,12 @@ server {
         # Автоматически повторяем при ошибке соединения (x-ui стартует позже nginx)
         proxy_next_upstream error timeout http_502 http_503;
         proxy_next_upstream_tries 3;
+
+        # Буферизация нужна для корректной передачи статики (JS/CSS)
+        # Без неё большие файлы рвутся по HTTP/2 (ERR_HTTP2_PROTOCOL_ERROR)
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
 
         # WebSocket для 3x-ui (live logs, stats)
         proxy_set_header Upgrade \$http_upgrade;
