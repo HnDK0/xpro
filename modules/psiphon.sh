@@ -271,7 +271,7 @@ removePsiphon() {
     systemctl daemon-reload
 
     # Удаляем outbound из 3x-ui
-    xuiApiLogin 2>/dev/null && xuiApiDelOutbound "psiphon" 2>/dev/null || true
+    xuiDbDelOutbound "psiphon" 2>/dev/null || true
 
     xpro_conf_set "PSIPHON_INSTALLED" "no"
     xpro_conf_del "OUTBOUND_PSIPHON_ADDED"
@@ -362,16 +362,14 @@ setPsiphonMode() {
 }
 
 # =================================================================
-# OUTBOUND'Ы В 3x-ui
+# OUTBOUND'Ы В 3x-ui (через БД)
 # =================================================================
 addPsiphonOutbound() {
-    xuiApiLogin || return 1
-    xuiApiAddOutbound "psiphon" "127.0.0.1" "$PSIPHON_PORT"
+    xuiDbAddOutbound "psiphon" "127.0.0.1" "$PSIPHON_PORT"
 }
 
 removePsiphonOutbound() {
-    xuiApiLogin || return 1
-    xuiApiDelOutbound "psiphon"
+    xuiDbDelOutbound "psiphon"
 }
 
 # =================================================================

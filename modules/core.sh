@@ -362,13 +362,12 @@ generateFreePort() {
 
 # =================================================================
 # ЗАВИСИМОСТИ ДЛЯ SYNC-INBOUNDS
-# jq и sqlite3 нужны для syncXrayInbounds() в nginx.sh
+# sqlite3 нужен для syncXrayInbounds() в nginx.sh
+# json_extract встроен в sqlite3 — jq не требуется
 # =================================================================
 installSyncDeps() {
-    local missing=0
-    command -v jq      &>/dev/null || { installPackage "jq"      || missing=1; }
-    command -v sqlite3 &>/dev/null || { installPackage "sqlite3" || missing=1; }
-    return $missing
+    command -v sqlite3 &>/dev/null || { installPackage "sqlite3" || return 1; }
+    return 0
 }
 
 # =================================================================

@@ -589,21 +589,23 @@ syncXrayInbounds() {
         return 1
     }
 
-    local tmp_blocks
-    tmp_blocks=$(mktemp)
-    trap 'rm -f "$tmp_blocks"' RETURN
+    local tmp_blocks=""
+    tmp_blocks=$(mktemp) || return 1
+    trap 'rm -f "${tmp_blocks:-}"' RETURN
 
-    local ws_count=0 grpc_count=0 sub_count=0
+    local ws_count=0 grpc_count=0 xhttp_count=0 sub_count=0
 
-    # ── WebSocket inbound'ы ──────────────────────────────────────
-    while IFS='|' read -r port settings; do
-        local path
-        path=$(echo "$settings" | jq -r '.wsSettings.path // empty' 2>/dev/null)
-        [ -z "$path" ] && continue
+    # ── Один запрос для всех типов транспорта ────────────────────
+    while IFS='|' read -r port network ws_path grpc_service xhttp_path; do
+        case "$network" in
 
-        cat >> "$tmp_blocks" << EOF
-    # xpro-sync: ws ${port} ${path}
-    location ${path} {
+        ws)
+            [ -z "$ws_path" ] && continue
+            # Убираем trailing slash — nginx иначе делает 301 если клиент шлёт без слеша
+            ws_path="${ws_path%/}"
+            cat >> "$tmp_blocks" << EOF
+    # xpro-sync: ws ${port} ${ws_path}
+    location ${ws_path} {
         proxy_pass             http://127.0.0.1:${port};
         proxy_http_version     1.1;
         proxy_set_header       Upgrade    \$http_upgrade;
@@ -618,21 +620,16 @@ syncXrayInbounds() {
     # xpro-sync-end
 
 EOF
-        ws_count=$((ws_count + 1))
-    done < <(sqlite3 "$xui_db" \
-        "SELECT port, stream_settings FROM inbounds
-         WHERE protocol IN ('vless','vmess','trojan')
-         AND stream_settings LIKE '%\"network\":\"ws\"%';")
+            ws_count=$((ws_count + 1))
+            ;;
 
-    # ── gRPC inbound'ы ───────────────────────────────────────────
-    while IFS='|' read -r port settings; do
-        local service
-        service=$(echo "$settings" | jq -r '.grpcSettings.serviceName // empty' 2>/dev/null)
-        [ -z "$service" ] && continue
-
-        cat >> "$tmp_blocks" << EOF
-    # xpro-sync: grpc ${port} ${service}
-    location /${service} {
+        grpc)
+            [ -z "$grpc_service" ] && continue
+            # grpc serviceName никогда не имеет слеша — но на всякий случай
+            grpc_service="${grpc_service%/}"
+            cat >> "$tmp_blocks" << EOF
+    # xpro-sync: grpc ${port} ${grpc_service}
+    location /${grpc_service} {
         grpc_pass            grpc://127.0.0.1:${port};
         grpc_read_timeout    1h;
         grpc_send_timeout    1h;
@@ -643,11 +640,42 @@ EOF
     # xpro-sync-end
 
 EOF
-        grpc_count=$((grpc_count + 1))
+            grpc_count=$((grpc_count + 1))
+            ;;
+
+        xhttp)
+            [ -z "$xhttp_path" ] && continue
+            xhttp_path="${xhttp_path%/}"
+            cat >> "$tmp_blocks" << EOF
+    # xpro-sync: xhttp ${port} ${xhttp_path}
+    location ${xhttp_path} {
+        proxy_pass              http://127.0.0.1:${port};
+        proxy_http_version      1.1;
+        proxy_set_header        Host            \$host;
+        proxy_set_header        X-Real-IP       \$remote_addr;
+        proxy_set_header        X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout      3600s;
+        proxy_send_timeout      3600s;
+        proxy_socket_keepalive  on;
+        proxy_buffering         off;
+        proxy_request_buffering off;
+        access_log              off;
+        error_log               /dev/null crit;
+    }
+    # xpro-sync-end
+
+EOF
+            xhttp_count=$((xhttp_count + 1))
+            ;;
+
+        esac
     done < <(sqlite3 "$xui_db" \
-        "SELECT port, stream_settings FROM inbounds
-         WHERE protocol IN ('vless','vmess','trojan')
-         AND stream_settings LIKE '%\"network\":\"grpc\"%';")
+        "SELECT port,
+            json_extract(stream_settings, '$.network'),
+            json_extract(stream_settings, '$.wsSettings.path'),
+            json_extract(stream_settings, '$.grpcSettings.serviceName'),
+            json_extract(stream_settings, '$.xhttpSettings.path')
+         FROM inbounds WHERE protocol IN ('vless','vmess','trojan');")
 
     # ── Подписка ─────────────────────────────────────────────────
     local sub_enabled sub_port sub_path sub_json_path
@@ -660,10 +688,10 @@ EOF
     sub_json_path=$(sqlite3 "$xui_db" \
         "SELECT value FROM settings WHERE key='subJsonPath' LIMIT 1;" 2>/dev/null)
 
-    # Нормализуем значения
+    # Нормализуем — убираем trailing slash
     sub_port="${sub_port:-2096}"
-    sub_path="${sub_path:-/sub/}"
-    sub_json_path="${sub_json_path:-/sub/json/}"
+    sub_path="${sub_path:-/sub}"; sub_path="${sub_path%/}"
+    sub_json_path="${sub_json_path:-/sub/json}"; sub_json_path="${sub_json_path%/}"
 
     if [ "${sub_enabled:-0}" = "1" ]; then
         cat >> "$tmp_blocks" << EOF
@@ -725,16 +753,17 @@ with open(conf_path, 'w') as f:
 PYEOF
 
     _nginx_reload
-    echo "${green}Синхронизировано: ${ws_count} WS, ${grpc_count} gRPC, ${sub_count} подписка${reset}"
+    echo "${green}Синхронизировано: ${ws_count} WS, ${grpc_count} gRPC, ${xhttp_count} xHTTP, ${sub_count} подписка${reset}"
 }
 
 _syncXrayInboundsStatus() {
     [ -f "$NGINX_XPRO_CONF" ] || { echo "—"; return; }
-    local ws grpc sub
-    ws=$(grep -c '# xpro-sync: ws'       "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    grpc=$(grep -c '# xpro-sync: grpc'   "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    sub=$(grep -c '# xpro-sync: sub '    "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
-    echo "${ws} WS, ${grpc} gRPC, ${sub} sub"
+    local ws grpc xhttp sub
+    ws=$(grep -c '# xpro-sync: ws'      "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    grpc=$(grep -c '# xpro-sync: grpc'  "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    xhttp=$(grep -c '# xpro-sync: xhttp' "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    sub=$(grep -c '# xpro-sync: sub '   "$NGINX_XPRO_CONF" 2>/dev/null || echo 0)
+    echo "${ws} WS, ${grpc} gRPC, ${xhttp} xHTTP, ${sub} sub"
 }
 
 setupSyncCron() {

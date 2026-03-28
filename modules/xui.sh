@@ -1,6 +1,6 @@
 #!/bin/bash
 # =================================================================
-# xui.sh — 3x-ui MHSanaei: установка, обновление, API
+# xui.sh — 3x-ui MHSanaei: установка, обновление, БД функции
 # =================================================================
 
 XUI_DIR="/usr/local/x-ui"
@@ -161,103 +161,35 @@ xuiWaitForDB() {
 }
 
 # =================================================================
-# API — базовые функции
+# БД ФУНКЦИИ — прямая модификация sqlite БД 3x-ui
 # =================================================================
 
-# Получить базовый URL панели
-_xuiBaseUrl() {
-    local port
-    port=$(xpro_conf_get "XUI_PORT")
-    echo "http://127.0.0.1:${port}"
-}
+# Добавить outbound (SOCKS5) в xrayTemplateConfig
+xuiDbAddOutbound() {
+    local tag="$1"       # warp | tor | psiphon
+    local address="$2"   # 127.0.0.1
+    local port="$3"      # 40000 | 40003 | 40002
 
-# Логин — возвращает session cookie в файл
-_XUI_COOKIE_FILE="/tmp/xpro_xui_session"
+    echo "${cyan}Добавляем outbound '${tag}' через БД...${reset}"
 
-xuiApiLogin() {
-    local user pass base_url web_path login_url
-    user=$(xpro_conf_get "XUI_USER")
-    pass=$(xpro_conf_get "XUI_PASS")
-    base_url=$(_xuiBaseUrl)
-    web_path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
-    web_path="${web_path#/}"; web_path="${web_path%/}"
-
-    # Путь логина зависит от WebBasePath
-    if [ -n "$web_path" ]; then
-        login_url="${base_url}/${web_path}/login"
-    else
-        login_url="${base_url}/login"
-    fi
-
-    local response
-    response=$(curl -s -c "$_XUI_COOKIE_FILE" \
-        -X POST "${login_url}" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=${user}&password=${pass}" \
-        --connect-timeout 10 2>/dev/null)
-
-    if echo "$response" | grep -q '"success":true'; then
-        return 0
-    else
-        rm -f "$_XUI_COOKIE_FILE"
-        echo "${red}Ошибка авторизации в 3x-ui API${reset}"
-        echo "${yellow}Проверь credentials: user=${user}, path=/${web_path}/${reset}"
+    [ -f "$XUI_DB" ] || {
+        echo "${red}Ошибка: База 3x-ui не найдена (${XUI_DB})${reset}"
         return 1
-    fi
-}
+    }
 
-# Выполнить API запрос (требует активной сессии)
-_xuiApiCall() {
-    local method="$1"
-    local endpoint="$2"
-    local data="${3:-}"
-    local base_url web_path
-    base_url=$(_xuiBaseUrl)
-    web_path=$(xpro_conf_get "XUI_WEB_BASE_PATH")
-    web_path="${web_path#/}"; web_path="${web_path%/}"
+    python3 << EOF
+import sqlite3, json
 
-    # Если cookie нет — логинимся
-    [ ! -f "$_XUI_COOKIE_FILE" ] && xuiApiLogin
+db = sqlite3.connect('${XUI_DB}')
+cur = db.cursor()
 
-    # Строим полный URL с учётом WebBasePath
-    local full_url
-    if [ -n "$web_path" ]; then
-        full_url="${base_url}/${web_path}${endpoint}"
-    else
-        full_url="${base_url}${endpoint}"
-    fi
+# Получаем текущий xrayTemplateConfig
+cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'")
+row = cur.fetchone()
+config = json.loads(row[0]) if row else {}
 
-    local args=(-s -b "$_XUI_COOKIE_FILE" --connect-timeout 10)
-    args+=(-X "$method" "$full_url")
-
-    if [ -n "$data" ]; then
-        args+=(-H "Content-Type: application/json" -d "$data")
-    fi
-
-    local response
-    response=$(curl "${args[@]}" 2>/dev/null)
-
-    # Если сессия истекла — логинимся заново и повторяем
-    if echo "$response" | grep -q '"success":false'; then
-        xuiApiLogin && \
-        response=$(curl "${args[@]}" 2>/dev/null)
-    fi
-
-    echo "$response"
-}
-
-# =================================================================
-# API — OUTBOUND'Ы
-# =================================================================
-
-# Сформировать JSON outbound для SOCKS5
-_xuiBuildSocks5Outbound() {
-    local tag="$1"
-    local address="$2"
-    local port="$3"
-
-    cat << EOF
-{
+# Новый outbound
+new_outbound = {
     "tag": "${tag}",
     "protocol": "socks",
     "settings": {
@@ -265,141 +197,146 @@ _xuiBuildSocks5Outbound() {
             "address": "${address}",
             "port": ${port}
         }]
-    },
-    "streamSettings": {
-        "network": "tcp"
     }
 }
+
+# Добавляем если не существует
+existing = config.get('outbounds', [])
+existing_tags = [o.get('tag') for o in existing]
+
+if '${tag}' not in existing_tags:
+    existing.append(new_outbound)
+    config['outbounds'] = existing
+    
+    # Записываем обратно
+    cur.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', ?)",
+        (json.dumps(config, indent=2),)
+    )
+    db.commit()
+    print("Outbound '${tag}' добавлен")
+else:
+    print("Outbound '${tag}' уже существует")
+
+db.close()
 EOF
+
+    # Перезапускаем x-ui для применения изменений
+    x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
+    echo "${green}Outbound '${tag}' добавлен${reset}"
 }
 
-xuiApiAddOutbound() {
-    local tag="$1"       # warp | tor | psiphon
-    local address="$2"   # 127.0.0.1
-    local port="$3"      # 40000 | 40003 | 40002
-
-    echo "${cyan}Добавляем outbound '${tag}' в 3x-ui...${reset}"
-
-    # Проверяем не существует ли уже
-    local existing
-    existing=$(xuiApiListOutbounds 2>/dev/null)
-    if echo "$existing" | grep -q "\"tag\":\"${tag}\""; then
-        echo "${yellow}Outbound '${tag}' уже существует, обновляем...${reset}"
-        xuiApiDelOutbound "$tag" 2>/dev/null || true
-        sleep 1
-    fi
-
-    local json
-    json=$(_xuiBuildSocks5Outbound "$tag" "$address" "$port")
-
-    local response
-    response=$(_xuiApiCall "POST" "/xui/xray/outbounds/add" "$json")
-
-    if echo "$response" | grep -q '"success":true'; then
-        echo "${green}Outbound '${tag}' добавлен${reset}"
-        xpro_conf_set "OUTBOUND_${tag^^}_ADDED" "yes"
-        return 0
-    else
-        echo "${red}Не удалось добавить outbound '${tag}'${reset}"
-        echo "${yellow}Добавь вручную в 3x-ui: Xray Configs → Outbounds → Add${reset}"
-        echo "${yellow}  Protocol: SOCKS5, Address: ${address}, Port: ${port}, Tag: ${tag}${reset}"
-        return 1
-    fi
-}
-
-xuiApiDelOutbound() {
+# Удалить outbound из xrayTemplateConfig
+xuiDbDelOutbound() {
     local tag="$1"
 
-    echo "${cyan}Удаляем outbound '${tag}' из 3x-ui...${reset}"
+    echo "${cyan}Удаляем outbound '${tag}' через БД...${reset}"
 
-    local response
-    response=$(_xuiApiCall "POST" "/xui/xray/outbounds/del/${tag}")
+    [ -f "$XUI_DB" ] || {
+        echo "${red}Ошибка: База 3x-ui не найдена (${XUI_DB})${reset}"
+        return 1
+    }
 
-    if echo "$response" | grep -q '"success":true'; then
-        echo "${green}Outbound '${tag}' удалён${reset}"
-        xpro_conf_del "OUTBOUND_${tag^^}_ADDED"
-        return 0
-    else
-        echo "${yellow}Outbound '${tag}' не найден или уже удалён${reset}"
-        return 0
-    fi
-}
+    python3 << EOF
+import sqlite3, json
 
-xuiApiListOutbounds() {
-    _xuiApiCall "GET" "/xui/xray/outbounds/list"
-}
+db = sqlite3.connect('${XUI_DB}')
+cur = db.cursor()
 
-xuiApiRestart() {
-    local response
-    response=$(_xuiApiCall "POST" "/xui/xray/restart")
-    if echo "$response" | grep -q '"success":true'; then
-        echo "${green}Xray перезапущен${reset}"
-    else
-        echo "${yellow}Перезапуск через systemctl...${reset}"
-        systemctl restart x-ui 2>/dev/null || true
-    fi
+# Получаем текущий xrayTemplateConfig
+cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'")
+row = cur.fetchone()
+if not row:
+    print("xrayTemplateConfig не найден")
+    db.close()
+    exit(0)
+
+config = json.loads(row[0])
+existing = config.get('outbounds', [])
+
+# Удаляем по tag
+new_outbounds = [o for o in existing if o.get('tag') != '${tag}']
+
+if len(new_outbounds) < len(existing):
+    config['outbounds'] = new_outbounds
+    cur.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('xrayTemplateConfig', ?)",
+        (json.dumps(config, indent=2),)
+    )
+    db.commit()
+    print("Outbound '${tag}' удалён")
+else:
+    print("Outbound '${tag}' не найден")
+
+db.close()
+EOF
+
+    x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
+    echo "${green}Outbound '${tag}' удалён${reset}"
 }
 
 # =================================================================
-# ПОДПИСКИ — чтение и запись через БД напрямую
-# Таблица settings: key/value пары конфигурации панели
+# НАСТРОЙКА ПОДПИСКИ ЧЕРЕЗ БД
 # =================================================================
+xuiDbSetSubSettings() {
+    local domain="$1"
+    local sub_path="${2:-}"
+    local sub_port="${3:-}"
 
-# Читает одно значение из settings по ключу
-_xuiDbSettingGet() {
-    local key="$1"
-    sqlite3 "$XUI_DB" \
-        "SELECT value FROM settings WHERE key='${key}' LIMIT 1;" 2>/dev/null
-}
+    echo "${cyan}Настройка подписки через БД...${reset}"
 
-# Пишет значение в settings (UPDATE если есть, INSERT если нет)
-_xuiDbSettingSet() {
-    local key="$1" val="$2"
-    sqlite3 "$XUI_DB" \
-        "INSERT INTO settings(key,value) VALUES('${key}','${val}')
-         ON CONFLICT(key) DO UPDATE SET value='${val}';" 2>/dev/null
-}
-
-xuiGetSubSettings() {
-    [ -f "$XUI_DB" ] || { echo "${red}БД не найдена${reset}"; return 1; }
-    local port path json_path enabled
-    port=$(_xuiDbSettingGet "subPort")
-    path=$(_xuiDbSettingGet "subPath")
-    json_path=$(_xuiDbSettingGet "subJsonPath")
-    enabled=$(_xuiDbSettingGet "subEnable")
-    echo "  subEnable:   ${enabled:-0}"
-    echo "  subPort:     ${port:-2096}"
-    echo "  subPath:     ${path:-/sub/}"
-    echo "  subJsonPath: ${json_path:-/sub/json/}"
-}
-
-# Устанавливает рандомный путь подписки (при первичной установке)
-# или произвольный переданный путь
-xuiSetSubPath() {
-    local new_path="${1:-}"
-    [ -f "$XUI_DB" ] || { echo "${red}БД не найдена${reset}"; return 1; }
+    [ -f "$XUI_DB" ] || {
+        echo "${red}Ошибка: База 3x-ui не найдена (${XUI_DB})${reset}"
+        return 1
+    }
 
     # Генерируем рандомный путь если не передан
-    if [ -z "$new_path" ]; then
-        new_path=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 20)
+    if [ -z "$sub_path" ]; then
+        sub_path=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 20)
     fi
-    # Убираем слеши — будем добавлять сами
-    new_path="${new_path#/}"; new_path="${new_path%/}"
+    sub_path="${sub_path#/}"; sub_path="${sub_path%/}"
 
-    # x-ui должен быть остановлен при прямой записи в БД
-    local was_running=0
-    systemctl is-active --quiet x-ui && was_running=1
-    [ "$was_running" -eq 1 ] && systemctl stop x-ui
+    # Порт: берём из БД если уже есть, иначе 2096
+    if [ -z "$sub_port" ]; then
+        sub_port=$(sqlite3 "$XUI_DB" \
+            "SELECT value FROM settings WHERE key='subPort' LIMIT 1;" 2>/dev/null)
+        sub_port="${sub_port:-2096}"
+    fi
 
-    _xuiDbSettingSet "subPath"     "/${new_path}/"
-    _xuiDbSettingSet "subJsonPath" "/${new_path}/json/"
-    _xuiDbSettingSet "subEnable"   "1"
+    # Пишем напрямую в БД — SQLite сам лочит запись, останавливать x-ui не нужно
+    sqlite3 "$XUI_DB" "INSERT OR REPLACE INTO settings (key, value) VALUES ('subDomain', '${domain}');"
+    sqlite3 "$XUI_DB" "INSERT OR REPLACE INTO settings (key, value) VALUES ('subPort', '${sub_port}');"
+    sqlite3 "$XUI_DB" "INSERT OR REPLACE INTO settings (key, value) VALUES ('subPath', '/${sub_path}');"
+    sqlite3 "$XUI_DB" "INSERT OR REPLACE INTO settings (key, value) VALUES ('subJsonPath', '/${sub_path}/json');"
+    sqlite3 "$XUI_DB" "INSERT OR REPLACE INTO settings (key, value) VALUES ('subEnable', '1');"
 
-    [ "$was_running" -eq 1 ] && systemctl start x-ui
+    x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || true
 
-    # Сохраняем путь в xpro.conf для быстрого чтения без БД
-    xpro_conf_set "XUI_SUB_PATH" "/${new_path}/"
-    echo "${green}Путь подписки установлен: /${new_path}/${reset}"
+    # Сохраняем в xpro.conf без trailing slash — syncXrayInbounds тоже пишет без
+    xpro_conf_set "XUI_SUB_PATH" "/${sub_path}"
+
+    echo "${green}Подписка настроена:${reset}"
+    echo "${green}  Домен: ${domain}${reset}"
+    echo "${green}  Путь: /${sub_path}${reset}"
+    echo "${green}  Порт: ${sub_port}${reset}"
+}
+
+# Получить текущие настройки подписки
+xuiDbGetSubSettings() {
+    [ -f "$XUI_DB" ] || { echo "${red}БД не найдена${reset}"; return 1; }
+    
+    local domain port path json_path enabled
+    domain=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subDomain' LIMIT 1;" 2>/dev/null)
+    port=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subPort' LIMIT 1;" 2>/dev/null)
+    path=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subPath' LIMIT 1;" 2>/dev/null)
+    json_path=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subJsonPath' LIMIT 1;" 2>/dev/null)
+    enabled=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subEnable' LIMIT 1;" 2>/dev/null)
+    
+    echo "  subEnable:   ${enabled:-0}"
+    echo "  subDomain:   ${domain:-не задан}"
+    echo "  subPort:     ${port:-2096}"
+    echo "  subPath:     ${path:-/sub}"
+    echo "  subJsonPath: ${json_path:-/sub/json}"
 }
 
 # =================================================================
@@ -414,51 +351,67 @@ xuiShowInbounds() {
         echo "${red}sqlite3 не установлен${reset}"
         return 1
     }
-    command -v jq &>/dev/null || {
-        echo "${red}jq не установлен${reset}"
-        return 1
-    }
 
     echo ""
     echo "${cyan}  WS inbound'ы:${reset}"
     local ws_found=0
-    while IFS='|' read -r remark port settings; do
-        local path
-        path=$(echo "$settings" | jq -r '.wsSettings.path // "?"' 2>/dev/null)
-        printf "    ${green}%-20s${reset}  порт: %-6s  path: %s\n" "$remark" "$port" "$path"
+    while IFS='|' read -r remark port network ws_path grpc_service xhttp_path; do
+        [ "$network" != "ws" ] && continue
+        printf "    ${green}%-20s${reset}  порт: %-6s  path: %s\n" "$remark" "$port" "$ws_path"
         ws_found=1
     done < <(sqlite3 "$XUI_DB" \
-        "SELECT remark, port, stream_settings FROM inbounds
-         WHERE protocol IN ('vless','vmess','trojan')
-         AND stream_settings LIKE '%\"network\":\"ws\"%';")
+        "SELECT remark, port,
+            json_extract(stream_settings, '$.network'),
+            json_extract(stream_settings, '$.wsSettings.path'),
+            json_extract(stream_settings, '$.grpcSettings.serviceName'),
+            json_extract(stream_settings, '$.xhttpSettings.path')
+         FROM inbounds WHERE protocol IN ('vless','vmess','trojan');")
     [ "$ws_found" -eq 0 ] && echo "    нет"
 
     echo ""
     echo "${cyan}  gRPC inbound'ы:${reset}"
     local grpc_found=0
-    while IFS='|' read -r remark port settings; do
-        local service
-        service=$(echo "$settings" | jq -r '.grpcSettings.serviceName // "?"' 2>/dev/null)
-        printf "    ${green}%-20s${reset}  порт: %-6s  service: %s\n" "$remark" "$port" "$service"
+    while IFS='|' read -r remark port network ws_path grpc_service xhttp_path; do
+        [ "$network" != "grpc" ] && continue
+        printf "    ${green}%-20s${reset}  порт: %-6s  service: %s\n" "$remark" "$port" "$grpc_service"
         grpc_found=1
     done < <(sqlite3 "$XUI_DB" \
-        "SELECT remark, port, stream_settings FROM inbounds
-         WHERE protocol IN ('vless','vmess','trojan')
-         AND stream_settings LIKE '%\"network\":\"grpc\"%';")
+        "SELECT remark, port,
+            json_extract(stream_settings, '$.network'),
+            json_extract(stream_settings, '$.wsSettings.path'),
+            json_extract(stream_settings, '$.grpcSettings.serviceName'),
+            json_extract(stream_settings, '$.xhttpSettings.path')
+         FROM inbounds WHERE protocol IN ('vless','vmess','trojan');")
     [ "$grpc_found" -eq 0 ] && echo "    нет"
 
     echo ""
+    echo "${cyan}  xHTTP inbound'ы:${reset}"
+    local xhttp_found=0
+    while IFS='|' read -r remark port network ws_path grpc_service xhttp_path; do
+        [ "$network" != "xhttp" ] && continue
+        printf "    ${green}%-20s${reset}  порт: %-6s  path: %s\n" "$remark" "$port" "$xhttp_path"
+        xhttp_found=1
+    done < <(sqlite3 "$XUI_DB" \
+        "SELECT remark, port,
+            json_extract(stream_settings, '$.network'),
+            json_extract(stream_settings, '$.wsSettings.path'),
+            json_extract(stream_settings, '$.grpcSettings.serviceName'),
+            json_extract(stream_settings, '$.xhttpSettings.path')
+         FROM inbounds WHERE protocol IN ('vless','vmess','trojan');")
+    [ "$xhttp_found" -eq 0 ] && echo "    нет"
+
+    echo ""
     echo "${cyan}  Подписка:${reset}"
-    local sub_enabled sub_port sub_path sub_json_path domain
-    sub_enabled=$(_xuiDbSettingGet "subEnable")
-    sub_port=$(_xuiDbSettingGet "subPort")
-    sub_path=$(_xuiDbSettingGet "subPath")
-    sub_json_path=$(_xuiDbSettingGet "subJsonPath")
-    domain=$(xpro_conf_get "DOMAIN" 2>/dev/null || echo "?")
+    local sub_enabled sub_port sub_path domain
+    sub_enabled=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subEnable' LIMIT 1;" 2>/dev/null)
+    sub_port=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subPort' LIMIT 1;" 2>/dev/null)
+    sub_path=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subPath' LIMIT 1;" 2>/dev/null)
+    domain=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='subDomain' LIMIT 1;" 2>/dev/null)
+    
     if [ "${sub_enabled:-0}" = "1" ]; then
         printf "    ${green}%-20s${reset}  порт: %-6s  path: %s\n" \
-            "subscription" "${sub_port:-2096}" "${sub_path:-/sub/}"
-        printf "    URL: ${cyan}https://%s%s${reset}\n" "$domain" "${sub_path:-/sub/}"
+            "subscription" "${sub_port:-2096}" "${sub_path:-/sub}"
+        printf "    URL: ${cyan}https://%s%s${reset}\n" "${domain:-?}" "${sub_path:-/sub}"
     else
         echo "    ${yellow}отключена${reset}"
     fi
@@ -501,10 +454,10 @@ manage3xuiMenu() {
         echo "  ${green}2.${reset} Обновить 3x-ui"
         echo "  ${green}3.${reset} Показать credentials"
         echo "  ${green}4.${reset} Сменить порт панели"
-        echo "  ${green}5.${reset} Перезапустить Xray"
-        echo "  ${green}6.${reset} Список outbound'ов"
-        echo "  ${green}7.${reset} Показать WS/gRPC inbound'ы"
-        echo "  ${green}8.${reset} Синхронизировать inbound'ы → Nginx"
+        echo "  ${green}5.${reset} Показать WS/gRPC inbound'ы"
+        echo "  ${green}6.${reset} Синхронизировать inbound'ы → Nginx"
+        echo "  ${green}7.${reset} Настроить подписку"
+        echo "  ${green}8.${reset} Показать настройки подписки"
         echo "  ${red}9.${reset} Удалить 3x-ui"
         echo "  ${green}0.${reset} Назад"
         echo ""
@@ -539,31 +492,10 @@ manage3xuiMenu() {
                 sleep 1
                 ;;
             5)
-                xuiApiLogin && xuiApiRestart
-                sleep 1
-                ;;
-            6)
-                echo ""
-                xuiApiLogin && xuiApiListOutbounds | \
-                    python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    obs = data.get('obj', [])
-    if not obs:
-        print('  Outbound\'ов нет')
-    for o in obs:
-        print(f\"  tag={o.get('tag','?')} protocol={o.get('protocol','?')}\")
-except:
-    print('  Не удалось получить список')
-" 2>/dev/null || echo "  Ошибка API"
-                read -r
-                ;;
-            7)
                 xuiShowInbounds
                 read -r
                 ;;
-            8)
+            6)
                 if declare -f syncXrayInbounds &>/dev/null; then
                     syncXrayInbounds
                 else
@@ -571,6 +503,19 @@ except:
                     [ -f "$lib" ] && source "$lib" && syncXrayInbounds \
                         || echo "${red}nginx.sh не найден${reset}"
                 fi
+                read -r
+                ;;
+            7)
+                echo ""
+                read -rp "  Домен для подписки: " sub_domain
+                read -rp "  Путь подписки (Enter для случайного): " sub_path
+                read -rp "  Порт подписки (Enter для текущего/2096): " sub_port
+                xuiDbSetSubSettings "$sub_domain" "$sub_path" "$sub_port"
+                read -r
+                ;;
+            8)
+                echo ""
+                xuiDbGetSubSettings
                 read -r
                 ;;
             9)

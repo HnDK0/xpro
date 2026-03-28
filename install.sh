@@ -324,7 +324,6 @@ main() {
     ${PACKAGE_MANAGEMENT_UPDATE} -qq 2>/dev/null || true
     installPackage "gnupg2"  || true
     installPackage "sqlite3" || true
-    installPackage "jq"      || true
     _ok "Базовые пакеты"
 
     _step "Настройка Swap"
@@ -377,7 +376,7 @@ main() {
             sleep 1
             sub_attempts=$((sub_attempts + 1))
         done
-        xuiSetSubPath || _yellow "warn: Не удалось задать путь подписки — используется /sub/"
+        xuiDbSetSubSettings "$ARG_DOMAIN" || _yellow "warn: Не удалось задать путь подписки — используется /sub/"
         _ok "Путь подписки: $(xpro_conf_get XUI_SUB_PATH)"
     fi
 
@@ -605,7 +604,7 @@ print_summary() {
     xui_pass=$(xpro_conf_get "XUI_PASS"      2>/dev/null || echo "?")
     xui_port=$(xpro_conf_get "XUI_PORT"      2>/dev/null || echo "$ARG_PORT")
     xui_path=$(xpro_conf_get "XUI_WEB_BASE_PATH" 2>/dev/null || echo "")
-    xui_sub_path=$(xpro_conf_get "XUI_SUB_PATH"  2>/dev/null || echo "/sub/")
+    xui_sub_path=$(xpro_conf_get "XUI_SUB_PATH"  2>/dev/null || echo "/sub")
     server_ip=$(getServerIP 2>/dev/null || echo "?")
     ssl_info=$(checkCertExpiry 2>/dev/null || echo "?")
 

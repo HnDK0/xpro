@@ -184,7 +184,7 @@ removeWarp() {
     systemctl daemon-reload
 
     # Удаляем outbound из 3x-ui
-    xuiApiLogin 2>/dev/null && xuiApiDelOutbound "warp" 2>/dev/null || true
+    xuiDbDelOutbound "warp" 2>/dev/null || true
 
     xpro_conf_set "WARP_INSTALLED" "no"
     xpro_conf_del "OUTBOUND_WARP_ADDED"
@@ -193,16 +193,14 @@ removeWarp() {
 }
 
 # =================================================================
-# OUTBOUND'Ы В 3x-ui
+# OUTBOUND'Ы В 3x-ui (через БД)
 # =================================================================
 addWarpOutbound() {
-    xuiApiLogin || return 1
-    xuiApiAddOutbound "warp" "127.0.0.1" "$WARP_PORT"
+    xuiDbAddOutbound "warp" "127.0.0.1" "$WARP_PORT"
 }
 
 removeWarpOutbound() {
-    xuiApiLogin || return 1
-    xuiApiDelOutbound "warp"
+    xuiDbDelOutbound "warp"
 }
 
 # =================================================================

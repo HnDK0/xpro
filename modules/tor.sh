@@ -432,7 +432,7 @@ removeTor() {
     systemctl daemon-reload
 
     # Удаляем outbound из 3x-ui
-    xuiApiLogin 2>/dev/null && xuiApiDelOutbound "tor" 2>/dev/null || true
+    xuiDbDelOutbound "tor" 2>/dev/null || true
 
     xpro_conf_set "TOR_INSTALLED" "no"
     xpro_conf_del "OUTBOUND_TOR_ADDED"
@@ -601,16 +601,14 @@ configureTorBridges() {
 }
 
 # =================================================================
-# OUTBOUND'Ы В 3x-ui
+# OUTBOUND'Ы В 3x-ui (через БД)
 # =================================================================
 addTorOutbound() {
-    xuiApiLogin || return 1
-    xuiApiAddOutbound "tor" "127.0.0.1" "$TOR_PORT"
+    xuiDbAddOutbound "tor" "127.0.0.1" "$TOR_PORT"
 }
 
 removeTorOutbound() {
-    xuiApiLogin || return 1
-    xuiApiDelOutbound "tor"
+    xuiDbDelOutbound "tor"
 }
 
 # =================================================================
