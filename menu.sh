@@ -191,6 +191,11 @@ handle_cli() {
             _load_modules
             show_status
             ;;
+        update)
+            _load_modules
+            isRoot
+            _update_xpro
+            ;;
         uninstall)
             _load_modules
             _uninstall_xpro
@@ -203,7 +208,7 @@ handle_cli() {
             ;;
         *)
             echo "Неизвестная команда: $cmd"
-            echo "Доступные: update-cf-ips, check-warp, check-tor, check-psiphon, sync-inbounds, status, uninstall"
+            echo "Доступные: update, update-cf-ips, check-warp, check-tor, check-psiphon, sync-inbounds, status, uninstall"
             exit 1
             ;;
     esac

@@ -397,3 +397,75 @@ dispatchCommand() {
             ;;
     esac
 }
+
+# =================================================================
+# ОБНОВЛЕНИЕ X-UI PRO — xpro update
+# Скачивает все модули и menu.sh заново с репозитория,
+# показывает что изменилось (версия до/после).
+# Сервисы не перезапускает — только файлы модулей.
+# =================================================================
+_update_xpro() {
+    local REPO_RAW="https://raw.githubusercontent.com/HnDK0/xpro/main"
+    local MODULES_URL="${REPO_RAW}/modules"
+    local MENU_URL="${REPO_RAW}/menu.sh"
+
+    echo ""
+    echo "${cyan}═══════════════════════════════════════${reset}"
+    echo "${cyan}  Обновление X-UI PRO${reset}"
+    echo "${cyan}═══════════════════════════════════════${reset}"
+    echo ""
+    echo "  Текущая версия: ${yellow}${XPRO_VERSION}${reset}"
+    echo ""
+
+    local failed=0
+
+    # Обновляем все модули
+    for mod in core xui nginx warp tor psiphon security logs; do
+        printf "  %-12s " "${mod}.sh"
+        if curl -fsSL --connect-timeout 15 \
+            "${MODULES_URL}/${mod}.sh" \
+            -o "${XPRO_LIB}/${mod}.sh" 2>/dev/null; then
+            chmod +x "${XPRO_LIB}/${mod}.sh"
+            printf "${green}OK${reset}\n"
+        else
+            printf "${red}FAIL${reset}\n"
+            failed=$((failed + 1))
+        fi
+    done
+
+    # Обновляем menu.sh и команду xpro
+    printf "  %-12s " "menu.sh"
+    if curl -fsSL --connect-timeout 15 \
+        "${MENU_URL}" \
+        -o "${XPRO_LIB}/menu.sh" 2>/dev/null; then
+        chmod +x "${XPRO_LIB}/menu.sh"
+        cp "${XPRO_LIB}/menu.sh" /usr/local/bin/xpro
+        chmod +x /usr/local/bin/xpro
+        printf "${green}OK${reset}\n"
+    else
+        printf "${red}FAIL${reset}\n"
+        failed=$((failed + 1))
+    fi
+
+    echo ""
+
+    if [ "$failed" -eq 0 ]; then
+        # Читаем новую версию из только что скачанного core.sh
+        local new_ver
+        new_ver=$(grep "^XPRO_VERSION=" "${XPRO_LIB}/core.sh" 2>/dev/null \
+            | cut -d= -f2 | tr -d '"')
+        echo "${green}Обновление завершено${reset}"
+        if [ -n "$new_ver" ] && [ "$new_ver" != "$XPRO_VERSION" ]; then
+            echo "  ${yellow}${XPRO_VERSION}${reset} → ${green}${new_ver}${reset}"
+        else
+            echo "  Версия: ${green}${new_ver:-актуальная}${reset}"
+        fi
+    else
+        echo "${red}Обновление завершено с ошибками (${failed} модуль(ей) не обновлено)${reset}"
+        echo "${yellow}Проверь соединение и повтори: xpro update${reset}"
+    fi
+
+    echo ""
+    echo "  Для применения изменений перезапусти: ${cyan}xpro${reset}"
+    echo ""
+}
