@@ -430,8 +430,29 @@ main() {
     # могут дать 502 если 3x-ui ещё не успел занять порт
     _step "Перезапуск 3x-ui (синхронизация с nginx)"
     systemctl restart x-ui 2>/dev/null || true
-    sleep 3
+
+    # Healthcheck — ждём пока панель начнёт отвечать (до 30 сек)
+    local xui_port_hc
+    xui_port_hc=$(xpro_conf_get "XUI_PORT")
+    local hc_attempts=0
+    echo -n "  Ожидание запуска панели"
+    while [ "$hc_attempts" -lt 30 ]; do
+        if curl -s --connect-timeout 2 "http://127.0.0.1:${xui_port_hc}/" -o /dev/null 2>/dev/null; then
+            echo " [OK]"
+            break
+        fi
+        echo -n "."
+        sleep 1
+        hc_attempts=$((hc_attempts + 1))
+    done
+    [ "$hc_attempts" -ge 30 ] && echo " [timeout — продолжаем]"
     _ok "3x-ui перезапущен"
+
+    # Синхронизируем путь подписки и inbound'ы в nginx —
+    # только сейчас xpro.conf существует и nginx запущен
+    _step "Синхронизация подписки и inbound'ов в Nginx"
+    syncXrayInbounds || _yellow "warn: Синхронизация inbound'ов не удалась — повтори: xpro → Nginx → Синхронизировать"
+    _ok "Nginx синхронизирован"
 
     # =============================================================
     # ШАГ 6 — Cloudflare Real IP

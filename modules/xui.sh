@@ -190,15 +190,38 @@ import sqlite3, json, sys
 db = sqlite3.connect('${XUI_DB}')
 cur = db.cursor()
 
-# Читаем полный текущий шаблон
+# Читаем полный текущий шаблон. Если записи ещё нет (первый запуск до входа
+# в панель) — создаём минимальный валидный шаблон, который x-ui примет.
 cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'")
 row = cur.fetchone()
-if not row:
-    print("Ошибка: xrayTemplateConfig не найден в БД")
-    db.close()
-    sys.exit(1)
-
-config = json.loads(row[0])
+if row:
+    config = json.loads(row[0])
+else:
+    # Базовый шаблон — идентичен дефолту 3x-ui (mhsanaei)
+    config = {
+        "log":    {"access": "none", "dnsLog": False, "error": "", "loglevel": "warning", "maskAddress": ""},
+        "api":    {"tag": "api", "services": ["HandlerService", "LoggerService", "StatsService"]},
+        "inbounds": [{"tag": "api", "listen": "127.0.0.1", "port": 62789, "protocol": "tunnel", "settings": {"address": "127.0.0.1"}}],
+        "outbounds": [
+            {"tag": "direct",  "protocol": "freedom",   "settings": {"domainStrategy": "AsIs", "redirect": "", "noises": []}},
+            {"tag": "blocked", "protocol": "blackhole",  "settings": {}}
+        ],
+        "policy": {
+            "levels": {"0": {"statsUserDownlink": True, "statsUserUplink": True}},
+            "system": {"statsInboundDownlink": True, "statsInboundUplink": True, "statsOutboundDownlink": False, "statsOutboundUplink": False}
+        },
+        "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [
+                {"type": "field", "inboundTag": ["api"], "outboundTag": "api"},
+                {"type": "field", "outboundTag": "blocked", "ip": ["geoip:private"]},
+                {"type": "field", "outboundTag": "blocked", "protocol": ["bittorrent"]}
+            ]
+        },
+        "stats": {},
+        "metrics": {"tag": "metrics_out", "listen": "127.0.0.1:11111"}
+    }
+    print("info: xrayTemplateConfig не найден — создаём базовый шаблон")
 
 # Удаляем только наши теги — всё остальное (direct, block и т.д.) не трогаем
 our_tags = {'warp', 'tor', 'psiphon'}
@@ -294,14 +317,9 @@ xuiDbSetSubSettings() {
     echo "${green}  Путь: /${sub_path}/${reset}"
     echo "${green}  Порт: ${sub_port}${reset}"
 
-    # Синхронизируем nginx сразу — чтобы новый путь подписки сразу работал
-    if declare -f syncXrayInbounds &>/dev/null; then
-        echo "${cyan}Синхронизируем nginx...${reset}"
-        syncXrayInbounds
-    elif [ -f "${XPRO_LIB}/nginx.sh" ]; then
-        source "${XPRO_LIB}/nginx.sh"
-        syncXrayInbounds
-    fi
+    # Примечание: syncXrayInbounds НЕ вызываем здесь —
+    # эта функция вызывается до установки nginx, файла xpro.conf ещё нет.
+    # Синхронизацию выполняет install.sh после writeNginxConfig (шаг 5).
 }
 
 # Получить текущие настройки подписки

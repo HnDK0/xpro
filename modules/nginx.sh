@@ -197,6 +197,11 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        proxy_connect_timeout 10s;
+
+        # Автоматически повторяем при ошибке соединения (x-ui стартует позже nginx)
+        proxy_next_upstream error timeout http_502 http_503;
+        proxy_next_upstream_tries 3;
 
         # WebSocket для 3x-ui (live logs, stats)
         proxy_set_header Upgrade \$http_upgrade;
